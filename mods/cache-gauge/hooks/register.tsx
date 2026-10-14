@@ -161,7 +161,7 @@ export const register: Register = (on, options) => {
       ) : (
         <Text color="error">○ cold</Text>
       )
-      consequence = isWarm ? ` · read ${price(cost.warm)} · cold ${cold}` : ` · next msg re-writes ${tokens(snap.ctxTokens)} (${cold})`
+      consequence = isWarm ? ` · next msg ${price(cost.warm)} (cold ${cold})` : ` · next msg ${cold}`
     }
 
     const mine = (

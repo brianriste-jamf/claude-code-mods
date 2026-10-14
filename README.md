@@ -10,7 +10,7 @@ Every message resends the whole conversation. While the prompt cache is warm, th
 | [**cache-keepalive**](mods/cache-keepalive) | Keeps the cache warm with a cheap ping while the session is idle, and stops once a cold cache would have been cheaper | `/cache-keepalive on \| off \| status` |
 
 ```
-● warm 4:40 · read $0.06 · cold $1.56 · ctx 250k/367k ██████▊░░░ 68%
+● warm 4:40 · next msg $0.06 (cold $1.56) · ctx 250k/367k ██████▊░░░ 68%
 ↻ keepalive 3/24 · next ping 2:10 · keeps warm ~1h34m
 ```
 
