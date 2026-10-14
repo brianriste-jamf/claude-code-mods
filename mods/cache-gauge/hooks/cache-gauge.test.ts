@@ -56,6 +56,8 @@ test('bars clamp and levels switch at their thresholds', () => {
   expect(bar(0.5, 10)).toBe('█████░░░░░')
   expect(bar(2, 4)).toBe('████')
   expect(bar(-1, 4)).toBe('░░░░')
+  expect(bar(0.68, 10)).toBe('██████▊░░░')
+  expect(bar(0.01, 10)).toBe('▏░░░░░░░░░')
   expect(level(0.49, 0.5, 0.8)).toBe('success')
   expect(level(0.5, 0.5, 0.8)).toBe('warning')
   expect(level(0.8, 0.5, 0.8)).toBe('error')
@@ -97,17 +99,17 @@ test('the band shows the gauges after a turn and goes cold past the TTL', async 
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...BAND, surface })
-    expect(await ui.find({ type: 'Text', text: /60k\/200k {2}30%/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /83% hit · warm 5:00/ })).toBeDefined()
-    // 0.099 / 24750 = 4e-6 per token; warm = 60000 * 0.05 * 4e-6
-    expect(await ui.find({ type: 'Text', text: /~\$0\.01 \(cold ~\$0\.30\) · session \$0\.10/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '● warm 5:00' })).toBeDefined()
+    // 0.099 / 24750 = 4e-6 per token; cold = 60000 * 1.25 * 4e-6
+    expect(await ui.find({ type: 'Text', text: ' · cold costs $0.30 · ctx 60k/200k ' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: ' 30%' })).toBeDefined()
     await ui.unmount()
   }
 
   await clock.advance(301_000)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /hit · cold/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /~\$0\.30 · session/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '○ cold' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: ' · next msg re-writes 60k ($0.30) · ctx 60k/200k ' })).toBeDefined()
 })
 
 test('a subagent turn keeps the band unchanged and skips that calibration sample', async ($, on) => {
@@ -118,31 +120,35 @@ test('a subagent turn keeps the band unchanged and skips that calibration sample
   const turn = { answer: '', durationMs: 1, isAborted: false, reason: 'answer', usage: TURN_USAGE } as const
   await $.turn.complete({ ...turn, turnId: 's1', agentId: 'sub' })
   const empty = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await empty.find({ type: 'Text', text: /^ctx/ })).toBeUndefined()
+  expect(await empty.find({ type: 'Text', text: /warm/ })).toBeUndefined()
 
   cost.usd = 5
   await $.turn.complete({ ...turn, turnId: 't1' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /list price/ })).toBeDefined()
+  // No calibrated sample yet: the price is the list price, marked as approximate.
+  expect(await ui.find({ type: 'Text', text: /cold costs ~\$/ })).toBeDefined()
 })
 
-test('Hide and the command toggle the band', async ($, on) => {
+test('the command toggles the band', async ($, on) => {
   answerUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
 
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  await ui.press({ key: 'hide' })
-  expect(await ui.find({ type: 'Text', text: /^ctx/ })).toBeUndefined()
+  const toggle = () =>
+    $.command.run({
+      command: 'cache-gauge',
+      args: '',
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: false, columns: 120 },
+    })
 
-  await $.command.run({
-    command: 'cache-gauge',
-    args: '',
-    origin: { kind: 'composer' },
-    presentation: { isFullscreen: false, columns: 120 },
-  })
+  await toggle()
+  const hidden = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await hidden.find({ type: 'Text', text: /warm/ })).toBeUndefined()
+
+  await toggle()
   const shown = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await shown.find({ type: 'Text', text: /^ctx/ })).toBeDefined()
+  expect(await shown.find({ type: 'Text', text: /warm/ })).toBeDefined()
 })
 
 test('the band still goes cold when the machine slept through the TTL', async ($, on) => {
@@ -181,10 +187,10 @@ test('the band still goes cold when the machine slept through the TTL', async ($
   await tick()
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /hit · cold/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '○ cold' })).toBeDefined()
 })
 
-test('ctx is measured against a compaction window smaller than the model window', async ($, on) => {
+test('ctx is measured against the compaction threshold', async ($, on) => {
   mock.clock(on)
   on('session.usage', () => ({
     value: {
@@ -215,5 +221,7 @@ test('ctx is measured against a compaction window smaller than the model window'
   })
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /238k\/400k {2}60% · compact at 367k · model 1\.0M/ })).toBeDefined()
+  // Measured against where compaction runs, not the model's 1M or the 400k window.
+  expect(await ui.find({ type: 'Text', text: / · ctx 238k\/367k $/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: ' 65%' })).toBeDefined()
 })

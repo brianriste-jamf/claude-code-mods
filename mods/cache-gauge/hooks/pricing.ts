@@ -51,24 +51,23 @@ export const calibrate = (prev: number | null, deltaUsd: number, units: number):
   return prev === null ? sample : prev + EMA_ALPHA * (sample - prev)
 }
 
-export const hitRatio = (u: Usage): number => {
-  const total = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
-
-  return total > 0 ? u.cache_read_input_tokens / total : 0
-}
-
 /** Cost of re-sending `ctxTokens` on the next request, excluding its new input and response. */
 export const nextCost = (ctxTokens: number, baseUsd: number, model: string, ttl: Ttl) => ({
   warm: ctxTokens * ratesFor(model).read * baseUsd,
   cold: ctxTokens * writeRatio(ttl) * baseUsd,
 })
 
-export const BAR_WIDTH = 20
+export const BAR_WIDTH = 10
+
+// Eighth blocks, so a short bar still moves visibly with each step.
+const EIGHTHS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉']
 
 export const bar = (fraction: number, width = BAR_WIDTH): string => {
-  const filled = Math.round(Math.min(1, Math.max(0, fraction)) * width)
+  const units = Math.round(Math.min(1, Math.max(0, fraction)) * width * 8)
+  const full = Math.floor(units / 8)
+  const part = EIGHTHS[units % 8]
 
-  return '█'.repeat(filled) + '░'.repeat(width - filled)
+  return '█'.repeat(full) + part + '░'.repeat(width - full - (part ? 1 : 0))
 }
 
 export type Level = 'success' | 'warning' | 'error'

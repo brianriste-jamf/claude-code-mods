@@ -6,13 +6,11 @@ Every message resends the whole conversation. While the prompt cache is warm, th
 
 | Mod | What it does | Command |
 |---|---|---|
-| [**cache-gauge**](mods/cache-gauge) | Three live gauges above the prompt: context fill, cache warm/cold countdown, and the estimated cost of the next request | `/cache-gauge` |
+| [**cache-gauge**](mods/cache-gauge) | One line above the prompt: how long the cache stays warm, what letting it go cold costs, and how close the context is to compaction | `/cache-gauge` |
 | [**cache-keepalive**](mods/cache-keepalive) | Keeps the cache warm with a cheap ping while the session is idle, and stops once a cold cache would have been cheaper | `/cache-keepalive on \| off \| status` |
 
 ```
-ctx   ████░░░░░░░░░░░░░░░░  187k/1.0M  19% · compact at 830k
-cache ███████████████████░  97% hit · warm 3:42
-next  █░░░░░░░░░░░░░░░░░░░  ~$0.04 (cold ~$0.94) · session $3.12   [Hide]
+● warm 4:40 · cold costs $1.56 · ctx 250k/367k ██████▊░░░ 68%
 ```
 
 ## Install

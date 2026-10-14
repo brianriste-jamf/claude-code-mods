@@ -3,19 +3,14 @@ export type Snapshot = {
   ctxTokens: number
   /** The model's context window. */
   window: number
-  /** The window auto-compaction measures against (`/autocompact`), when known; may be smaller than `window`. */
-  compactWindow: number | null
   /** Auto-compact threshold in tokens, when auto-compaction is on. */
   compactAt: number | null
-  /** cache_read / all input tokens of the last turn, 0..1. */
-  hitRatio: number
   /** $.clock.now() when the last main-loop response finished. */
   respondedAt: number
   model: string
   /** USD per uncached input token, calibrated from /cost or the list-price fallback. */
   baseUsd: number
   isCalibrated: boolean
-  sessionUsd: number
 }
 
 declare module 'claude-code' {

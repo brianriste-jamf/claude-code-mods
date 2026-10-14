@@ -6,7 +6,6 @@ import {
   bar,
   calibrate,
   countdown,
-  hitRatio,
   level,
   nextCost,
   ratesFor,
@@ -24,7 +23,6 @@ const now = atom({ plugin: 'cache-gauge', key: 'now' } as const, 0)
 
 export const register: Register = (on, options) => {
   const ttl: Ttl = options.cacheTtl === '1h' ? '1h' : '5m'
-  const maxRequestUsd = typeof options.maxRequestUsd === 'number' && options.maxRequestUsd > 0 ? options.maxRequestUsd : 0.5
   let lastUsd = 0
   let baseUsd: number | null = null
   let sawSubagent = false
@@ -102,14 +100,11 @@ export const register: Register = (on, options) => {
     const fresh: Snapshot = {
       ctxTokens: usage.context.tokens ?? 0,
       window: usage.context.window,
-      compactWindow: breakdown?.rawMaxTokens ?? null,
       compactAt: breakdown?.isAutoCompactEnabled ? (breakdown.autoCompactThreshold ?? null) : null,
-      hitRatio: hitRatio(e.usage),
       respondedAt,
       model: e.usage.model,
       baseUsd: baseUsd ?? ratesFor(e.usage.model).input,
       isCalibrated: baseUsd !== null,
-      sessionUsd,
     }
     await update($, snapshot, () => fresh)
     drawnAt = respondedAt
@@ -124,50 +119,28 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const { Box, Text } = $.ui.resolve(e)
     const t = Math.max(await read($, now), snap.respondedAt)
     const leftMs = snap.respondedAt + ttlMs(ttl) - t
     const isWarm = leftMs > 0
 
-    // Fill is what is left before compaction, so it is measured against the
-    // compaction window whenever /autocompact made it smaller than the model's.
-    const isNarrowed = snap.compactWindow !== null && snap.compactWindow > 0 && snap.compactWindow < snap.window
-    const limit = isNarrowed ? (snap.compactWindow ?? snap.window) : snap.window
+    // Fill toward where compaction runs (/autocompact moves it), else the model's window.
+    const limit = snap.compactAt ?? snap.window
     const ctx = limit > 0 ? snap.ctxTokens / limit : 0
-    const compact = snap.compactAt ? ` · compact at ${tokens(snap.compactAt)}` : ''
-    const model = isNarrowed ? ` · model ${tokens(snap.window)}` : ''
 
-    const cost = nextCost(snap.ctxTokens, snap.baseUsd, snap.model, ttl)
-    const estimate = isWarm ? cost.warm : cost.cold
-    const pricing = snap.isCalibrated ? '' : ' · list price'
+    const cold = `${snap.isCalibrated ? '' : '~'}${usd(nextCost(snap.ctxTokens, snap.baseUsd, snap.model, ttl).cold)}`
+    const consequence = isWarm ? `cold costs ${cold}` : `next msg re-writes ${tokens(snap.ctxTokens)} (${cold})`
 
     return (
-      <Box flexDirection="column">
-        <Box>
-          <Text>ctx   </Text>
-          <Text color={level(ctx, 0.5, 0.8)}>{bar(ctx)}</Text>
-          <Text dimColor>
-            {`  ${tokens(snap.ctxTokens)}/${tokens(limit)}  ${Math.round(ctx * 100)}%${compact}${model}`}
-          </Text>
-        </Box>
-        <Box>
-          <Text>cache </Text>
-          <Text color={isWarm ? level(1 - snap.hitRatio, 0.5, 0.8) : 'error'}>{bar(snap.hitRatio)}</Text>
-          <Text dimColor>
-            {`  ${Math.round(snap.hitRatio * 100)}% hit · `}
-            {isWarm ? `warm ${countdown(leftMs)}` : 'cold, next request re-writes it'}
-          </Text>
-        </Box>
-        <Box>
-          <Text>next  </Text>
-          <Text color={level(estimate / maxRequestUsd, 0.5, 1)}>{bar(estimate / maxRequestUsd)}</Text>
-          <Text dimColor>
-            {`  ~${usd(estimate)}`}
-            {isWarm ? ` (cold ~${usd(cost.cold)})` : ''}
-            {` · session ${usd(snap.sessionUsd)}${pricing}  `}
-          </Text>
-          <Button key="hide" label="Hide" onPress={() => update($, isHidden, () => true)} />
-        </Box>
+      <Box>
+        {isWarm ? (
+          <Text color={leftMs < ttlMs(ttl) * 0.2 ? 'warning' : 'success'}>{`● warm ${countdown(leftMs)}`}</Text>
+        ) : (
+          <Text color="error">○ cold</Text>
+        )}
+        <Text dimColor>{` · ${consequence} · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} `}</Text>
+        <Text color={level(ctx, 0.5, 0.8)}>{bar(ctx)}</Text>
+        <Text dimColor>{` ${Math.round(ctx * 100)}%`}</Text>
       </Box>
     )
   })
