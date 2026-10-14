@@ -247,7 +247,12 @@ export const register: Register = (on, options) => {
       const price = (n: number) => `${snap.isCalibrated ? '' : '~'}${usd(n)}`
       const cold = price(cost.cold)
       state = isWarm ? (
-        <Text color={leftMs < ttlMs(ttl) * 0.2 ? 'warning' : 'success'}>{`● warm ${countdown(leftMs)}`}</Text>
+        // Mid-turn every request restarts the lifetime: count down only once idle.
+        e.props.isWorking ? (
+          <Text color="success">● warm</Text>
+        ) : (
+          <Text color={leftMs < ttlMs(ttl) * 0.2 ? 'warning' : 'success'}>{`● warm ${countdown(leftMs)}`}</Text>
+        )
       ) : (
         <Text color="error">○ cold</Text>
       )

@@ -18,7 +18,7 @@ One line above the Claude Code prompt that answers the two questions worth actin
 
 A `~` before the price means it is still the list price: no reply has given a usable calibration sample yet.
 
-The line refreshes after every model request, so a long turn of tool calls keeps the countdown at full rather than draining it from the previous reply. Price calibration still happens once per reply. With `cache-keepalive` armed, its line sits right under this one. The countdown ticks every second while the cache is warm and stops once it has drawn it cold, and it catches up correctly after the machine sleeps through the expiry.
+The line refreshes after every model request, so a long turn of tool calls keeps the cache warm rather than draining it from the previous reply. While Claude is working it shows just `● warm`; the countdown starts once the turn ends and nothing is being sent. Price calibration still happens once per reply. With `cache-keepalive` armed, its line sits right under this one. The countdown ticks every second while the cache is warm and stops once it has drawn it cold, and it catches up correctly after the machine sleeps through the expiry.
 
 ## Commands
 

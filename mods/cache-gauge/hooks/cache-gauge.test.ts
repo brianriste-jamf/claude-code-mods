@@ -337,4 +337,9 @@ test('each request of a long turn restarts the countdown', async ($, on) => {
 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: '● warm 1:40' })).toBeDefined()
+  await ui.unmount()
+
+  // While the turn runs the countdown would only keep resetting, so it is left out.
+  const working = await $.ui.mount({ ...BAND, props: { ...BAND.props, isWorking: true }, surface: 'terminal' })
+  expect(await working.find({ type: 'Text', text: '● warm' })).toBeDefined()
 })
