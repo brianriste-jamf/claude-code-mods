@@ -1,0 +1,44 @@
+{
+  "name": "cache-keepalive",
+  "version": "0.2.0",
+  "description": "Keeps the prompt cache warm with a cheap ping while the session is idle; reads the real cache lifetime (5m or 1h) and sizes interval and ping budget from it and the current model.",
+  "userConfig": {
+    "autoStart": {
+      "type": "boolean",
+      "title": "Start armed",
+      "description": "Arm the keep-alive when a session starts; off by default, /keepalive on|off switches it during a session",
+      "default": false
+    },
+    "ttl": {
+      "type": "string",
+      "title": "Cache lifetime",
+      "description": "auto reads Claude Code's own controls (FORCE_PROMPT_CACHING_5M, CLAUDE_CODE_PROMPT_CACHE_TTL, promptCacheTtl, ENABLE_PROMPT_CACHING_1H) and assumes 5m when none is set; 5m or 1h overrides that",
+      "options": ["auto", "5m", "1h"],
+      "default": "auto"
+    },
+    "intervalPercent": {
+      "type": "number",
+      "title": "Ping spacing (% of the lifetime)",
+      "description": "Idle share of the lifetime before a ping, kept between 50 and 95; 90 is 4.5 minutes on a 5m cache, 54 on a 1h one",
+      "default": 90
+    },
+    "budgetFactor": {
+      "type": "number",
+      "title": "Budget factor",
+      "description": "Scales the break-even ping count; 1 pings up to the point where a lapsed cache would have been cheaper, 0.5 stops at half of it",
+      "default": 1
+    },
+    "maxPings": {
+      "type": "number",
+      "title": "Hard cap on pings per idle period",
+      "description": "Upper bound whatever the model's break-even says",
+      "default": 40
+    },
+    "maxHours": {
+      "type": "number",
+      "title": "Hard cap on keep-alive duration (hours)",
+      "description": "Longest a single idle period is kept warm; matters mostly for a 1h cache, where break-even alone would allow a day",
+      "default": 4
+    }
+  }
+}

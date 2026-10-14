@@ -1,0 +1,21 @@
+{
+  "name": "token-gauge",
+  "version": "0.1.0",
+  "description": "Live gauges above the prompt: context window fill, prompt-cache state, and the estimated cost of the next request",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "maxRequestUsd": {
+      "type": "number",
+      "title": "Next-request scale (USD)",
+      "description": "The cost the 'next' bar treats as full",
+      "default": 0.5
+    },
+    "cacheTtl": {
+      "type": "string",
+      "title": "Prompt-cache TTL",
+      "description": "How long the cache stays warm after a response",
+      "options": ["5m", "1h"],
+      "default": "5m"
+    }
+  }
+}
