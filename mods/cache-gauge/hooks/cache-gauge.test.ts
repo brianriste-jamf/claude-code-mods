@@ -283,3 +283,37 @@ test('a compaction redraws the context and the cache as cold', async ($, on) => 
   expect(await ui.find({ type: 'Text', text: '○ cold' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: / · ctx 12k\/200k $/ })).toBeDefined()
 })
+
+test('a /model switch prices the other model and leaves its cache cold until switched back', async ($, on) => {
+  const cost = { usd: 0 }
+  answerUsage(on, cost)
+  on('turn.complete', () => ({ text: '' }))
+  let model = OPUS
+  on('session.model', () => ({ value: model }))
+  on('command.run', { command: 'model' }, () => ({ text: '' }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  cost.usd = 0.099
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  const switchTo = (to: string) => {
+    model = to
+
+    return $.command.run({
+      command: 'model',
+      args: to,
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: false, columns: 120 },
+    })
+  }
+
+  await switchTo('claude-sonnet-5-5')
+  const sonnet = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await sonnet.find({ type: 'Text', text: '○ cold' })).toBeDefined()
+  // Uncalibrated on Sonnet: list input 2e-6, cold = 60000 * 1.25 * 2e-6
+  expect(await sonnet.find({ type: 'Text', text: ' · next msg ~$0.15 · ctx 60k/200k ' })).toBeDefined()
+  await sonnet.unmount()
+
+  await switchTo(OPUS)
+  const back = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await back.find({ type: 'Text', text: '● warm 5:00' })).toBeDefined()
+  expect(await back.find({ type: 'Text', text: ' · next msg $0.01 (cold $0.30) · ctx 60k/200k ' })).toBeDefined()
+})

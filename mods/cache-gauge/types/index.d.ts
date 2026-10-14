@@ -9,8 +9,11 @@ export type Snapshot = {
   respondedAt: number | null
   /** A compaction ran since that response: its new prefix is not cached yet. */
   isCompacted: boolean
+  /** The model that answered last: the one whose cache holds the context. */
   model: string
-  /** USD per uncached input token, calibrated from /cost or the list-price fallback. */
+  /** The model the next message goes to; differs from `model` after `/model`, whose switch leaves the cache behind. */
+  currentModel: string
+  /** USD per uncached input token on `currentModel`, calibrated from /cost or the list-price fallback. */
   baseUsd: number
   isCalibrated: boolean
 }

@@ -6,6 +6,7 @@ import {
   bar,
   calibrate,
   countdown,
+  isSameModel,
   level,
   nextCost,
   ratesFor,
@@ -24,7 +25,9 @@ const now = atom({ plugin: 'cache-gauge', key: 'now' } as const, 0)
 export const register: Register = (on, options) => {
   const ttl: Ttl = options.cacheTtl === '1h' ? '1h' : '5m'
   let lastUsd = 0
-  let baseUsd: number | null = null
+  // Calibrated per model: a /model switch must not price one model at another's rate.
+  const bases = new Map<string, number>()
+  const baseFor = (model: string) => [...bases].find(([m]) => isSameModel(m, model))?.[1] ?? null
   let sawSubagent = false
   let warmUntil = 0
   let drawnAt = 0
@@ -46,6 +49,7 @@ export const register: Register = (on, options) => {
         respondedAt: null,
         isCompacted: false,
         model,
+        currentModel: model,
         baseUsd: ratesFor(model).input,
         isCalibrated: false,
       }))
@@ -107,9 +111,12 @@ export const register: Register = (on, options) => {
     const usage = await $.session.usage({ breakdown: 'summary' })
     const sessionUsd = usage.cost?.usd ?? lastUsd
     // A subagent's cost is in Δcost but not in e.usage, so that sample would overprice.
-    if (!sawSubagent) {
-      baseUsd = calibrate(baseUsd, sessionUsd - lastUsd, weightedUnits(e.usage, e.usage.model, ttl))
+    const model = e.usage.model
+    const sample = sawSubagent ? null : calibrate(baseFor(model), sessionUsd - lastUsd, weightedUnits(e.usage, model, ttl))
+    if (sample !== null) {
+      bases.set(model, sample)
     }
+    const baseUsd = baseFor(model)
     lastUsd = sessionUsd
     sawSubagent = false
 
@@ -122,8 +129,9 @@ export const register: Register = (on, options) => {
       compactAt: breakdown?.isAutoCompactEnabled ? (breakdown.autoCompactThreshold ?? null) : null,
       respondedAt,
       isCompacted: false,
-      model: e.usage.model,
-      baseUsd: baseUsd ?? ratesFor(e.usage.model).input,
+      model,
+      currentModel: model,
+      baseUsd: baseUsd ?? ratesFor(model).input,
       isCalibrated: baseUsd !== null,
     }
     await update($, snapshot, () => fresh)
@@ -155,6 +163,28 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // `/model` (and `/fast`, when it promotes the model) points the next message at
+  // another model: its own price, and none of the context in its cache.
+  on('command.run', async ($, e, next) => {
+    const result = await next(e)
+    if (e.command !== 'model' && e.command !== 'fast') {
+      return result
+    }
+    const held = await read($, snapshot)
+    const current = await $.session.model()
+    if (held !== null && !isSameModel(current, held.currentModel)) {
+      const base = baseFor(current)
+      await update($, snapshot, () => ({
+        ...held,
+        currentModel: current,
+        baseUsd: base ?? ratesFor(current).input,
+        isCalibrated: base !== null,
+      }))
+    }
+
+    return result
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const snap = await read($, snapshot)
     if (e.props.hasSurvey || snap === null || (await read($, isHidden))) {
@@ -176,8 +206,9 @@ export const register: Register = (on, options) => {
     } else {
       const t = Math.max(await read($, now), snap.respondedAt)
       const leftMs = snap.respondedAt + ttlMs(ttl) - t
-      const isWarm = !snap.isCompacted && leftMs > 0
-      const cost = nextCost(snap.ctxTokens, snap.baseUsd, snap.model, ttl)
+      const current = snap.currentModel ?? snap.model
+      const isWarm = !snap.isCompacted && isSameModel(current, snap.model) && leftMs > 0
+      const cost = nextCost(snap.ctxTokens, snap.baseUsd, current, ttl)
       const price = (n: number) => `${snap.isCalibrated ? '' : '~'}${usd(n)}`
       const cold = price(cost.cold)
       state = isWarm ? (
