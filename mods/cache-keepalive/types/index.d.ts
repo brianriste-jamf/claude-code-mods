@@ -7,6 +7,6 @@ export type KeepaliveView =
 
 declare module 'claude-code' {
   interface PluginState {
-    'cache-keepalive': { view: KeepaliveView }
+    'cache-keepalive': { view: KeepaliveView; lastReply: number }
   }
 }

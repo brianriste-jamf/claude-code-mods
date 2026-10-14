@@ -9,6 +9,8 @@ import type { PlanOptions, Ttl } from './budget'
 const NAME = 'cache-keepalive'
 const TICK_MS = 1000
 const view = atom({ plugin: 'cache-keepalive', key: 'view' } as const, { kind: 'off' } as KeepaliveView)
+// Survives a reload, which starts the module over: idle time counts from the last reply, not the reload.
+const lastReply = atom({ plugin: 'cache-keepalive', key: 'lastReply' } as const, 0)
 const PING = 'Cache keep-alive ping. Reply with the single word "ok" and use no tools.'
 
 type Keepalive = {
@@ -175,7 +177,8 @@ export const register: Register = (on, options) => {
   }
 
   on('session.start', async ($, e, next) => {
-    k.lastActivity = await $.clock.now()
+    const held = await read($, lastReply)
+    k.lastActivity = held > 0 ? held : await $.clock.now()
     await refreshTtl($, k)
     // Priced from the start: an unknown model falls back to the 0.1x read price,
     // which shrinks Opus 5.5's break-even budget from 24 pings to 11.
@@ -206,6 +209,7 @@ export const register: Register = (on, options) => {
     if (e.agentId === undefined) {
       k.isBusy = false
       k.lastActivity = await $.clock.now()
+      await update($, lastReply, () => k.lastActivity)
       k.model = e.usage?.model ?? k.model
     }
     const result = await next(e)
