@@ -14,7 +14,7 @@ const TURN_USAGE = {
   model: OPUS,
 }
 const BAND = {
-  plugin: 'token-gauge',
+  plugin: 'cache-gauge',
   component: 'AbovePrompt',
   props: {
     hasSurvey: false,
@@ -136,7 +136,7 @@ test('Hide and the command toggle the band', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /^ctx/ })).toBeUndefined()
 
   await $.command.run({
-    command: 'token-gauge',
+    command: 'cache-gauge',
     args: '',
     origin: { kind: 'composer' },
     presentation: { isFullscreen: false, columns: 120 },

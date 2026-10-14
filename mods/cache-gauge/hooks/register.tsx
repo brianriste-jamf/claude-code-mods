@@ -17,10 +17,10 @@ import {
 } from './pricing'
 import type { Ttl } from './pricing'
 
-const PLUGIN = 'token-gauge'
-const snapshot = atom({ plugin: 'token-gauge', key: 'snapshot' } as const, null)
-const isHidden = atom({ plugin: 'token-gauge', key: 'isHidden' } as const, false)
-const now = atom({ plugin: 'token-gauge', key: 'now' } as const, 0)
+const PLUGIN = 'cache-gauge'
+const snapshot = atom({ plugin: 'cache-gauge', key: 'snapshot' } as const, null)
+const isHidden = atom({ plugin: 'cache-gauge', key: 'isHidden' } as const, false)
+const now = atom({ plugin: 'cache-gauge', key: 'now' } as const, 0)
 
 export const register: Register = (on, options) => {
   const ttl: Ttl = options.cacheTtl === '1h' ? '1h' : '5m'
@@ -32,7 +32,7 @@ export const register: Register = (on, options) => {
   let drawnAt = 0
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: PLUGIN, description: 'Show or hide the token gauges above the prompt' })
+    await $.command.register({ name: PLUGIN, description: 'Show or hide the cache gauges above the prompt' })
     lastUsd = (await $.session.usage()).cost?.usd ?? 0
     // Ticks until the band has drawn the cache cold. Not a time window: a machine
     // that sleeps through the expiry wakes to a first tick long past it.
@@ -73,7 +73,7 @@ export const register: Register = (on, options) => {
     }
     const hidden = await update($, isHidden, was => !was)
 
-    return { text: hidden ? 'Token gauges hidden.' : 'Token gauges shown.' }
+    return { text: hidden ? 'Cache gauges hidden.' : 'Cache gauges shown.' }
   })
 
   on('turn.complete', async ($, e, next) => {

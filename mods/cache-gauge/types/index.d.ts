@@ -17,6 +17,6 @@ export type Snapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'token-gauge': { snapshot: Snapshot | null; isHidden: boolean; now: number }
+    'cache-gauge': { snapshot: Snapshot | null; isHidden: boolean; now: number }
   }
 }

@@ -3,7 +3,7 @@
   "owner": {"name": "Petr Vanek"},
   "description": "Petr Vanek's Claude Code mods",
   "plugins": [
-    {"name": "token-gauge", "source": "./mods/token-gauge", "description": "Live gauges above the prompt: context window fill, prompt-cache state, and the estimated cost of the next request"},
+    {"name": "cache-gauge", "source": "./mods/cache-gauge", "description": "Live gauges above the prompt: context window fill, prompt-cache state, and the estimated cost of the next request"},
     {"name": "cache-keepalive", "source": "./mods/cache-keepalive", "description": "Keeps the prompt cache warm with a cheap ping while the session is idle"}
   ]
 }

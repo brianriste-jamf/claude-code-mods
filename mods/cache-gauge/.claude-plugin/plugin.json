@@ -1,6 +1,6 @@
 {
-  "name": "token-gauge",
-  "version": "0.1.0",
+  "name": "cache-gauge",
+  "version": "0.2.0",
   "description": "Live gauges above the prompt: context window fill, prompt-cache state, and the estimated cost of the next request",
   "types": "./types/index.d.ts",
   "userConfig": {
