@@ -11,19 +11,21 @@ One line above the Claude Code prompt that answers the two questions worth actin
 |---|---|---|
 | `● warm 4:40` | Time until the prompt cache goes cold | green; yellow in the last 20% of the lifetime (the last minute on a 5m cache) |
 | `○ cold` | The cache has expired | red |
+| `◌ waiting for a reply` | Right after a start or reload: the context is known, the cache's state is not until a reply finishes | dim |
 | `cold costs $1.56` | What the next message pays to re-write the whole context if you let the cache lapse | |
 | `next msg re-writes 250k ($1.56)` | Once cold: what the next message will re-write, and its cost | |
 | `ctx 250k/367k` | Context of the last reply against where auto-compaction runs (set with `/autocompact`); against the model's window when auto-compaction is off | bar green < 50%, yellow < 80%, red above |
 
 A `~` before the price means it is still the list price: no reply has given a usable calibration sample yet.
 
-The line refreshes after every reply. The countdown ticks every second while the cache is warm and stops once it has drawn it cold, and it catches up correctly after the machine sleeps through the expiry.
+The line refreshes after every reply. With `cache-keepalive` armed, its line sits right under this one. The countdown ticks every second while the cache is warm and stops once it has drawn it cold, and it catches up correctly after the machine sleeps through the expiry.
 
 ## Commands
 
 | Command | Does |
 |---|---|
-| `/cache-gauge` | Show or hide the line |
+| `/cache-gauge` | Toggle the line |
+| `/cache-gauge show` / `hide` | Show or hide it explicitly |
 | `/cache-gauge debug` | Print the raw context figures the line is drawn from, for diagnosing a number that looks wrong |
 
 ## Options

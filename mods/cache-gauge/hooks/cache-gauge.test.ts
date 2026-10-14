@@ -64,7 +64,7 @@ test('bars clamp and levels switch at their thresholds', () => {
 })
 
 // What the engine would answer beneath the mod.
-const answerUsage = (on: On, cost: { usd: number }) => {
+const answerUsage = (on: On, cost: { usd: number }, below: object = { type: 'Box', children: [] }) => {
   const clock = mock.clock(on)
   on('session.usage', () => ({
     value: {
@@ -76,7 +76,7 @@ const answerUsage = (on: On, cost: { usd: number }) => {
   }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
-  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('ui.render', () => below)
 
   return clock
 }
@@ -224,4 +224,47 @@ test('ctx is measured against the compaction threshold', async ($, on) => {
   // Measured against where compaction runs, not the model's 1M or the 400k window.
   expect(await ui.find({ type: 'Text', text: / · ctx 238k\/367k $/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: ' 65%' })).toBeDefined()
+})
+
+test('the band draws the context at start, before any reply', async ($, on) => {
+  answerUsage(on, { usd: 0 })
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: '◌ waiting for a reply' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: ' · ctx 60k/200k ' })).toBeDefined()
+})
+
+test('show and hide set the band, a bare command toggles it', async ($, on) => {
+  answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  const run = async (args: string) => {
+    await $.command.run({
+      command: 'cache-gauge',
+      args,
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: false, columns: 120 },
+    })
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+    return (await ui.find({ type: 'Text', text: /warm/ })) !== undefined
+  }
+
+  expect(await run('show')).toBe(true)
+  expect(await run('show')).toBe(true)
+  expect(await run('hide')).toBe(false)
+  expect(await run('hide')).toBe(false)
+  expect(await run('')).toBe(true)
+})
+
+test('the band keeps the line another mod draws beneath it', async ($, on) => {
+  answerUsage(on, { usd: 0.099 }, { type: 'Text', props: {}, children: ['↻ keepalive 3/24'] })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: '● warm 5:00' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '↻ keepalive 3/24' })).toBeDefined()
 })

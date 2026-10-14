@@ -18,13 +18,16 @@ That ping is a real turn in the transcript. It costs a cache read of the context
 | `/cache-keepalive off` | Disarm it |
 | `/cache-keepalive status` | Model, cache lifetime and where it was read from, pings used / budget, spacing |
 
-While armed, the status line shows its state:
+While armed, it draws a line above the prompt, under `cache-gauge`'s when that mod is installed:
 
 ```
-cache-keepalive[5m] 3/24 · next 2:10 · 1h34m left
-cache-keepalive[5m] 24/24 · budget used, lapses in 4:12
-cache-keepalive[5m] 0/24 · cache cold
+↻ keepalive 3/24 · next ping 2:10 · keeps warm ~1h34m
+↻ keepalive 24/24 · budget used, cache lapses in 4:12
+↻ keepalive 3/24 · waits for the turn to end
+↻ keepalive 0/24 · cache already cold, nothing to keep warm
 ```
+
+*keeps warm* is how long the cache will stay warm if you stay away: the remaining pings plus one cache lifetime after the last. Off, it draws nothing.
 
 ## When it stops pinging
 

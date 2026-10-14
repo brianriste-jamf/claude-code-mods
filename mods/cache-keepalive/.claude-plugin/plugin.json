@@ -1,7 +1,8 @@
 {
   "name": "cache-keepalive",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Keeps the prompt cache warm with a cheap ping while the session is idle; reads the real cache lifetime (5m or 1h) and sizes interval and ping budget from it and the current model.",
+  "types": "./types/index.d.ts",
   "userConfig": {
     "autoStart": {
       "type": "boolean",
@@ -13,7 +14,11 @@
       "type": "string",
       "title": "Cache lifetime",
       "description": "auto reads Claude Code's own controls (FORCE_PROMPT_CACHING_5M, CLAUDE_CODE_PROMPT_CACHE_TTL, promptCacheTtl, ENABLE_PROMPT_CACHING_1H) and assumes 5m when none is set; 5m or 1h overrides that",
-      "options": ["auto", "5m", "1h"],
+      "options": [
+        "auto",
+        "5m",
+        "1h"
+      ],
       "default": "auto"
     },
     "intervalPercent": {

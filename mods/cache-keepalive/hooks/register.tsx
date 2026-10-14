@@ -1,10 +1,14 @@
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { clock, plan, resolveTtl } from './budget'
+import type { KeepaliveView } from '../types'
+
+import { clock, describe, plan, resolveTtl } from './budget'
 import type { PlanOptions, Ttl } from './budget'
 
 const NAME = 'cache-keepalive'
-const TICK_MS = 5000
+const TICK_MS = 1000
+const view = atom({ plugin: 'cache-keepalive', key: 'view' } as const, { kind: 'off' } as KeepaliveView)
 const PING = 'Cache keep-alive ping. Reply with the single word "ok" and use no tools.'
 
 type Keepalive = {
@@ -38,28 +42,36 @@ async function refreshTtl($: EngineInterface, k: Keepalive) {
   k.ttlSource = resolved.source
 }
 
+// A tick redraws the band only when what it shows changed.
+async function show($: EngineInterface, next: KeepaliveView) {
+  const was = await read($, view)
+  if (JSON.stringify(was) !== JSON.stringify(next)) {
+    await update($, view, () => next)
+  }
+}
+
 async function step($: EngineInterface, k: Keepalive) {
   if (!k.isEnabled) {
-    $.ui.status(undefined)
+    await show($, { kind: 'off' })
     return
   }
 
   const p = plan(k.model, k.ttl, k.options)
-  const head = `${NAME}[${p.ttl}] ${k.pings}/${p.limit}`
+  const counts = { pings: k.pings, limit: p.limit }
   const idle = (await $.clock.now()) - k.lastActivity
 
   if (k.isBusy) {
-    $.ui.status(`${head} · turn running`)
+    await show($, { kind: 'busy', ...counts })
     return
   }
 
   if (idle >= p.ttlMs) {
-    $.ui.status(`${head} · cache cold`)
+    await show($, { kind: 'cold', ...counts })
     return
   }
 
   if (k.pings >= p.limit) {
-    $.ui.status(`${head} · budget used, lapses in ${clock(p.ttlMs - idle)}`)
+    await show($, { kind: 'spent', ...counts, lapsesInMs: p.ttlMs - idle })
 
     if (!k.hasWarned) {
       k.hasWarned = true
@@ -82,10 +94,11 @@ async function step($: EngineInterface, k: Keepalive) {
     return
   }
 
-  const untilNext = p.intervalMs - idle
-  const left = untilNext + (p.limit - k.pings - 1) * p.intervalMs
+  const nextPingMs = p.intervalMs - idle
+  // The last ping still leaves the cache warm for a full lifetime after it.
+  const warmForMs = nextPingMs + (p.limit - k.pings - 1) * p.intervalMs + p.ttlMs
 
-  $.ui.status(`${head} · next ${clock(untilNext)} · ${clock(left)} left`)
+  await show($, { kind: 'waiting', ...counts, nextPingMs, warmForMs })
 }
 
 export const register: Register = (on, options) => {
@@ -168,7 +181,7 @@ export const register: Register = (on, options) => {
 
     if (arg === 'off') {
       k.isEnabled = false
-      $.ui.status(undefined)
+      await show($, { kind: 'off' })
 
       return { text: 'Cache keep-alive off.' }
     }
@@ -179,5 +192,32 @@ export const register: Register = (on, options) => {
     return {
       text: `Cache keep-alive ${k.isEnabled ? 'armed' : 'off'}: model ${k.model ?? 'unknown yet'}, ${p.ttl} cache (${k.ttlSource}), ${k.pings}/${p.limit} pings this idle period, one every ${clock(p.intervalMs)}.`,
     }
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const v = await read($, view)
+    if (e.props.hasSurvey || v.kind === 'off') {
+      return next(e)
+    }
+
+    const { Box, Text } = $.ui.resolve(e)
+    const line = describe(v)
+    const mine = (
+      <Box>
+        <Text color={line.color} dimColor={line.color === undefined}>↻ </Text>
+        <Text dimColor>{line.text}</Text>
+      </Box>
+    )
+    // Wrap, not replace: another mod's line (cache-gauge) stays in the band.
+    const below = await next(e)
+
+    return below ? (
+      <Box flexDirection="column">
+        {below}
+        {mine}
+      </Box>
+    ) : (
+      mine
+    )
   })
 }

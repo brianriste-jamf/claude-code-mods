@@ -31,7 +31,24 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: PLUGIN, description: 'Show or hide the cache gauges above the prompt' })
-    lastUsd = (await $.session.usage()).cost?.usd ?? 0
+    const usage = await $.session.usage({ breakdown: 'summary' })
+    lastUsd = usage.cost?.usd ?? 0
+    // Draw the context at once (a reload, a resumed session) rather than after the
+    // next reply; the cache's state is unknown until a reply says when it was written.
+    const held = await read($, snapshot)
+    if (held === null && usage.context.tokens !== undefined) {
+      const breakdown = usage.context.breakdown
+      const model = breakdown?.model ?? ''
+      await update($, snapshot, () => ({
+        ctxTokens: usage.context.tokens ?? 0,
+        window: usage.context.window,
+        compactAt: breakdown?.isAutoCompactEnabled ? (breakdown.autoCompactThreshold ?? null) : null,
+        respondedAt: null,
+        model,
+        baseUsd: ratesFor(model).input,
+        isCalibrated: false,
+      }))
+    }
     // Ticks until the band has drawn the cache cold. Not a time window: a machine
     // that sleeps through the expiry wakes to a first tick long past it.
     $.clock.every(1000, () => {
@@ -69,7 +86,8 @@ export const register: Register = (on, options) => {
 
       return { text: JSON.stringify(raw, null, 2) }
     }
-    const hidden = await update($, isHidden, was => !was)
+    const arg = e.args.trim().toLowerCase()
+    const hidden = await update($, isHidden, was => (arg === 'show' ? false : arg === 'hide' ? true : !was))
 
     return { text: hidden ? 'Cache gauges hidden.' : 'Cache gauges shown.' }
   })
@@ -120,28 +138,48 @@ export const register: Register = (on, options) => {
     }
 
     const { Box, Text } = $.ui.resolve(e)
-    const t = Math.max(await read($, now), snap.respondedAt)
-    const leftMs = snap.respondedAt + ttlMs(ttl) - t
-    const isWarm = leftMs > 0
 
     // Fill toward where compaction runs (/autocompact moves it), else the model's window.
     const limit = snap.compactAt ?? snap.window
     const ctx = limit > 0 ? snap.ctxTokens / limit : 0
+    const ctxPart = ` · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} `
 
-    const cold = `${snap.isCalibrated ? '' : '~'}${usd(nextCost(snap.ctxTokens, snap.baseUsd, snap.model, ttl).cold)}`
-    const consequence = isWarm ? `cold costs ${cold}` : `next msg re-writes ${tokens(snap.ctxTokens)} (${cold})`
+    let state
+    let consequence
+    if (snap.respondedAt === null) {
+      state = <Text dimColor>◌ waiting for a reply</Text>
+      consequence = ''
+    } else {
+      const t = Math.max(await read($, now), snap.respondedAt)
+      const leftMs = snap.respondedAt + ttlMs(ttl) - t
+      const isWarm = leftMs > 0
+      const cold = `${snap.isCalibrated ? '' : '~'}${usd(nextCost(snap.ctxTokens, snap.baseUsd, snap.model, ttl).cold)}`
+      state = isWarm ? (
+        <Text color={leftMs < ttlMs(ttl) * 0.2 ? 'warning' : 'success'}>{`● warm ${countdown(leftMs)}`}</Text>
+      ) : (
+        <Text color="error">○ cold</Text>
+      )
+      consequence = isWarm ? ` · cold costs ${cold}` : ` · next msg re-writes ${tokens(snap.ctxTokens)} (${cold})`
+    }
 
-    return (
+    const mine = (
       <Box>
-        {isWarm ? (
-          <Text color={leftMs < ttlMs(ttl) * 0.2 ? 'warning' : 'success'}>{`● warm ${countdown(leftMs)}`}</Text>
-        ) : (
-          <Text color="error">○ cold</Text>
-        )}
-        <Text dimColor>{` · ${consequence} · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} `}</Text>
+        {state}
+        <Text dimColor>{`${consequence}${ctxPart}`}</Text>
         <Text color={level(ctx, 0.5, 0.8)}>{bar(ctx)}</Text>
         <Text dimColor>{` ${Math.round(ctx * 100)}%`}</Text>
       </Box>
+    )
+    // Wrap, not replace: another mod's line (cache-keepalive) stays in the band.
+    const below = await next(e)
+
+    return below ? (
+      <Box flexDirection="column">
+        {mine}
+        {below}
+      </Box>
+    ) : (
+      mine
     )
   })
 }

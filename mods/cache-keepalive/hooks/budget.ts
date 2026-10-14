@@ -1,3 +1,5 @@
+import type { KeepaliveView } from '../types'
+
 export type Ttl = '5m' | '1h'
 
 const TTL_MS: Record<Ttl, number> = { '5m': 5 * 60_000, '1h': 60 * 60_000 }
@@ -67,4 +69,20 @@ export function clock(ms: number): string {
   if (minutes >= 60) return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m`
 
   return `${minutes}:${seconds}`
+}
+
+/** The band line for an armed keep-alive: glyph colour and text. */
+export function describe(v: Exclude<KeepaliveView, { kind: 'off' }>): { color: 'success' | 'warning' | undefined; text: string } {
+  const head = `keepalive ${v.pings}/${v.limit}`
+
+  switch (v.kind) {
+    case 'waiting':
+      return { color: 'success', text: `${head} · next ping ${clock(v.nextPingMs)} · keeps warm ~${clock(v.warmForMs)}` }
+    case 'spent':
+      return { color: 'warning', text: `${head} · budget used, cache lapses in ${clock(v.lapsesInMs)}` }
+    case 'busy':
+      return { color: 'success', text: `${head} · waits for the turn to end` }
+    case 'cold':
+      return { color: undefined, text: `${head} · cache already cold, nothing to keep warm` }
+  }
 }
