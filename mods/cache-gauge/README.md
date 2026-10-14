@@ -18,7 +18,7 @@ One line above the Claude Code prompt that answers the two questions worth actin
 
 A `~` before the price means it is still the list price: no reply has given a usable calibration sample yet.
 
-The line refreshes after every reply. With `cache-keepalive` armed, its line sits right under this one. The countdown ticks every second while the cache is warm and stops once it has drawn it cold, and it catches up correctly after the machine sleeps through the expiry.
+The line refreshes after every model request, so a long turn of tool calls keeps the countdown at full rather than draining it from the previous reply. Price calibration still happens once per reply. With `cache-keepalive` armed, its line sits right under this one. The countdown ticks every second while the cache is warm and stops once it has drawn it cold, and it catches up correctly after the machine sleeps through the expiry.
 
 ## Commands
 
@@ -41,5 +41,5 @@ The estimate starts from list prices per model family (Opus, Sonnet, Haiku, Fabl
 ## Known limitations
 
 - `ctx` counts the input side of the last reply; the reply's own output, which the next request also sends, is not included.
-- The line refreshes when a reply finishes, and after a compaction: `ctx` drops to the compacted size and the cache shows `○ cold`, since nothing of the new conversation is cached until the next reply writes it. Changing the threshold with `/autocompact` shows on the next reply.
+- The line refreshes after each request and after a compaction: `ctx` drops to the compacted size and the cache shows `○ cold`, since nothing of the new conversation is cached until the next reply writes it. Changing the threshold with `/autocompact` shows on the next reply.
 - After `/model` (or `/fast`) switches to another model, the price is that model's (with `~` until one of its replies calibrates it) and the cache shows `○ cold`: the prompt cache is per model, so the context is written again on the first message. Switching back within the lifetime shows the original cache warm again.

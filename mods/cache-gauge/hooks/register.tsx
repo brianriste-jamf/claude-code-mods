@@ -145,6 +145,37 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // Every main-loop request reads the cache and restarts its lifetime, so a long
+  // turn of tool calls keeps it warm; the turn's end alone would draw it cold.
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    if (e.agentId !== undefined || result.usage === null) {
+      return result
+    }
+    const held = await read($, snapshot)
+    if (held !== null) {
+      const usage = await $.session.usage({ breakdown: 'summary' })
+      const respondedAt = await $.clock.now()
+      warmUntil = respondedAt + ttlMs(ttl)
+      const model = result.usage.model
+      const base = baseFor(model)
+      await update($, snapshot, () => ({
+        ...held,
+        ctxTokens: usage.context.tokens ?? held.ctxTokens,
+        respondedAt,
+        isCompacted: false,
+        model,
+        currentModel: model,
+        baseUsd: base ?? ratesFor(model).input,
+        isCalibrated: base !== null,
+      }))
+      drawnAt = respondedAt
+      await update($, now, () => respondedAt)
+    }
+
+    return result
+  })
+
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
     if (e.trigger === 'precompute' || e.agentId !== undefined || result.skip !== undefined) {

@@ -317,3 +317,24 @@ test('a /model switch prices the other model and leaves its cache cold until swi
   expect(await back.find({ type: 'Text', text: '● warm 5:00' })).toBeDefined()
   expect(await back.find({ type: 'Text', text: ' · next msg $0.01 (cold $0.30) · ctx 60k/200k ' })).toBeDefined()
 })
+
+test('each request of a long turn restarts the countdown', async ($, on) => {
+  const clock = answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  const step = { turnId: 't2', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: TURN_USAGE } as const
+  on('turn.step', async function* () {
+    return step
+  })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  await clock.advance(200_000)
+  // The step streams: drain it so the hooks run to its result.
+  for await (const chunk of $.turn.step({ turnId: 't2', index: 0, model: OPUS, messageCount: 3 })) {
+    void chunk
+  }
+  await clock.advance(200_000)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: '● warm 1:40' })).toBeDefined()
+})
