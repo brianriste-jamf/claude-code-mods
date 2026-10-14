@@ -41,4 +41,4 @@ The estimate starts from list prices per model family (Opus, Sonnet, Haiku, Fabl
 ## Known limitations
 
 - `ctx` counts the input side of the last reply; the reply's own output, which the next request also sends, is not included.
-- The line refreshes when a reply finishes. After `/compact` or `/autocompact` they show the old figures until the next reply.
+- The line refreshes when a reply finishes, and after a compaction: `ctx` drops to the compacted size and the cache shows `○ cold`, since nothing of the new conversation is cached until the next reply writes it. Changing the threshold with `/autocompact` shows on the next reply.

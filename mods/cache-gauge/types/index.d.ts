@@ -7,6 +7,8 @@ export type Snapshot = {
   compactAt: number | null
   /** $.clock.now() when the last main-loop response finished; null before one did (seeded at start). */
   respondedAt: number | null
+  /** A compaction ran since that response: its new prefix is not cached yet. */
+  isCompacted: boolean
   model: string
   /** USD per uncached input token, calibrated from /cost or the list-price fallback. */
   baseUsd: number

@@ -268,3 +268,18 @@ test('the band keeps the line another mod draws beneath it', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: '● warm 5:00' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '↻ keepalive 3/24' })).toBeDefined()
 })
+
+test('a compaction redraws the context and the cache as cold', async ($, on) => {
+  answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  const summary = [{ role: 'user', text: 'summary', toolUses: [] }] as const
+  on('session.compact', () => ({ messages: summary, tokensBefore: 60_000, tokensAfter: 12_000 }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  await $.session.compact({ trigger: 'manual', messages: summary })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: '○ cold' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: / · ctx 12k\/200k $/ })).toBeDefined()
+})

@@ -44,6 +44,7 @@ export const register: Register = (on, options) => {
         window: usage.context.window,
         compactAt: breakdown?.isAutoCompactEnabled ? (breakdown.autoCompactThreshold ?? null) : null,
         respondedAt: null,
+        isCompacted: false,
         model,
         baseUsd: ratesFor(model).input,
         isCalibrated: false,
@@ -120,6 +121,7 @@ export const register: Register = (on, options) => {
       window: usage.context.window,
       compactAt: breakdown?.isAutoCompactEnabled ? (breakdown.autoCompactThreshold ?? null) : null,
       respondedAt,
+      isCompacted: false,
       model: e.usage.model,
       baseUsd: baseUsd ?? ratesFor(e.usage.model).input,
       isCalibrated: baseUsd !== null,
@@ -127,6 +129,28 @@ export const register: Register = (on, options) => {
     await update($, snapshot, () => fresh)
     drawnAt = respondedAt
     await update($, now, () => respondedAt)
+
+    return result
+  })
+
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (e.trigger === 'precompute' || e.agentId !== undefined || result.skip !== undefined) {
+      return result
+    }
+    const held = await read($, snapshot)
+    const usage = await $.session.usage({ breakdown: 'summary' })
+    // The summarizer's cost is in the session total but in no reply's tokens.
+    lastUsd = usage.cost?.usd ?? lastUsd
+    if (held !== null) {
+      // The compacted conversation is a new prefix: nothing of it is cached yet.
+      warmUntil = 0
+      await update($, snapshot, () => ({
+        ...held,
+        ctxTokens: result.tokensAfter ?? usage.context.tokens ?? held.ctxTokens,
+        isCompacted: true,
+      }))
+    }
 
     return result
   })
@@ -152,7 +176,7 @@ export const register: Register = (on, options) => {
     } else {
       const t = Math.max(await read($, now), snap.respondedAt)
       const leftMs = snap.respondedAt + ttlMs(ttl) - t
-      const isWarm = leftMs > 0
+      const isWarm = !snap.isCompacted && leftMs > 0
       const cost = nextCost(snap.ctxTokens, snap.baseUsd, snap.model, ttl)
       const price = (n: number) => `${snap.isCalibrated ? '' : '~'}${usd(n)}`
       const cold = price(cost.cold)
