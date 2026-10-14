@@ -54,6 +54,10 @@ export const register: Register = (on, options) => {
         isCalibrated: false,
       }))
     }
+    // A reload starts the module over: pick the countdown up from the held reply.
+    if (held !== null && held.respondedAt !== null && !held.isCompacted) {
+      warmUntil = held.respondedAt + ttlMs(ttl)
+    }
     // Ticks until the band has drawn the cache cold. Not a time window: a machine
     // that sleeps through the expiry wakes to a first tick long past it.
     $.clock.every(1000, () => {
