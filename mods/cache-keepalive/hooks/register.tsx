@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { KeepaliveView } from '../types'
 
-import { clock, describe, plan, resolveTtl } from './budget'
+import { clock, describe, money, plan, resolveTtl } from './budget'
 import type { PlanOptions, Ttl } from './budget'
 
 const NAME = 'cache-keepalive'
@@ -22,6 +22,11 @@ type Keepalive = {
   ttlSource: string
   lastActivity: number
   pings: number
+  notifyEvery: number
+  /** Session cost when the ping in flight was sent; null while none is. */
+  pingFromUsd: number | null
+  /** What this idle period's pings have cost, from the session total. */
+  spentUsd: number
 }
 
 const number = (value: unknown, fallback: number) =>
@@ -50,6 +55,50 @@ async function show($: EngineInterface, next: KeepaliveView) {
   }
 }
 
+async function sessionUsd($: EngineInterface): Promise<number | null> {
+  try {
+    return (await $.session.usage({ breakdown: 'summary' })).cost?.usd ?? null
+  } catch {
+    return null
+  }
+}
+
+// A native notification, so the person away from the terminal sees what idling costs.
+async function notify($: EngineInterface, k: Keepalive, text: string) {
+  if (k.notifyEvery <= 0) {
+    return
+  }
+  try {
+    await $.ui.notify(text, { title: 'Cache keep-alive' })
+  } catch {
+    // A Notification hook denied it, or the write failed: the band still shows it.
+  }
+}
+
+// After a ping's turn: add its cost, and say every `notifyEvery` pings what idling has cost.
+async function settlePing($: EngineInterface, k: Keepalive) {
+  const from = k.pingFromUsd
+  k.pingFromUsd = null
+  const to = await sessionUsd($)
+  if (from !== null && to !== null && to > from) {
+    k.spentUsd += to - from
+  }
+  if (k.notifyEvery <= 0 || k.pings % k.notifyEvery !== 0) {
+    return
+  }
+  const p = plan(k.model, k.ttl, k.options)
+  const left = p.limit - k.pings
+  const tail =
+    left > 0
+      ? `keeps the cache warm ~${clock(left * p.intervalMs + p.ttlMs)} more`
+      : `that was the last, the cache lapses in ${clock(p.ttlMs)}`
+  await notify(
+    $,
+    k,
+    `Idle: ping ${k.pings}/${p.limit}, ${money(k.spentUsd)} spent with nobody working; ${tail}. Reply, or /cache-keepalive off.`,
+  )
+}
+
 async function step($: EngineInterface, k: Keepalive) {
   if (!k.isEnabled) {
     await show($, { kind: 'off' })
@@ -57,7 +106,7 @@ async function step($: EngineInterface, k: Keepalive) {
   }
 
   const p = plan(k.model, k.ttl, k.options)
-  const counts = { pings: k.pings, limit: p.limit }
+  const counts = { pings: k.pings, limit: p.limit, spentUsd: k.spentUsd }
   const idle = (await $.clock.now()) - k.lastActivity
 
   if (k.isBusy) {
@@ -75,7 +124,7 @@ async function step($: EngineInterface, k: Keepalive) {
 
     if (!k.hasWarned) {
       k.hasWarned = true
-      $.ui.toast(`cache-keepalive: ${p.limit} pings used, the cache will lapse`)
+      await notify($, k, `Budget used: ${p.limit} pings cost ${money(k.spentUsd)}. The cache lapses in ${clock(p.ttlMs - idle)}.`)
     }
 
     return
@@ -84,11 +133,13 @@ async function step($: EngineInterface, k: Keepalive) {
   if (idle >= p.intervalMs) {
     k.pings += 1
     k.isBusy = true
+    k.pingFromUsd = await sessionUsd($)
 
     try {
       await $.prompt.submit({ text: PING })
     } catch {
       k.isBusy = false
+      k.pingFromUsd = null
     }
 
     return
@@ -118,6 +169,9 @@ export const register: Register = (on, options) => {
     ttlSource: 'default (assumed)',
     lastActivity: 0,
     pings: 0,
+    notifyEvery: Math.max(0, Math.floor(number(options.notifyEvery, 1))),
+    pingFromUsd: null,
+    spentUsd: 0,
   }
 
   on('session.start', async ($, e, next) => {
@@ -154,8 +208,12 @@ export const register: Register = (on, options) => {
       k.lastActivity = await $.clock.now()
       k.model = e.usage?.model ?? k.model
     }
+    const result = await next(e)
+    if (e.agentId === undefined && k.pingFromUsd !== null) {
+      await settlePing($, k)
+    }
 
-    return next(e)
+    return result
   })
 
   on('prompt.submit', ($, e, next) => {
@@ -163,6 +221,7 @@ export const register: Register = (on, options) => {
 
     if (!isOwnPing) {
       k.pings = 0
+      k.spentUsd = 0
       k.hasWarned = false
     }
 
@@ -176,6 +235,7 @@ export const register: Register = (on, options) => {
       await refreshTtl($, k)
       k.isEnabled = true
       k.pings = 0
+      k.spentUsd = 0
       k.hasWarned = false
       await step($, k)
 
@@ -197,7 +257,7 @@ export const register: Register = (on, options) => {
     const p = plan(k.model, k.ttl, k.options)
 
     return {
-      text: `Cache keep-alive ${k.isEnabled ? 'armed' : 'off'}: model ${k.model ?? 'unknown yet'}, ${p.ttl} cache (${k.ttlSource}), ${k.pings}/${p.limit} pings this idle period, one every ${clock(p.intervalMs)}.`,
+      text: `Cache keep-alive ${k.isEnabled ? 'armed' : 'off'}: model ${k.model ?? 'unknown yet'}, ${p.ttl} cache (${k.ttlSource}), ${k.pings}/${p.limit} pings this idle period (${money(k.spentUsd)}), one every ${clock(p.intervalMs)}.`,
     }
   })
 

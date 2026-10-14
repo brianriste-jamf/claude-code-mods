@@ -71,9 +71,11 @@ export function clock(ms: number): string {
   return `${minutes}:${seconds}`
 }
 
+export const money = (usd: number): string => (usd < 0.01 ? `$${usd.toFixed(3)}` : `$${usd.toFixed(2)}`)
+
 /** The band line for an armed keep-alive: glyph colour and text. */
 export function describe(v: Exclude<KeepaliveView, { kind: 'off' }>): { color: 'success' | 'warning' | undefined; text: string } {
-  const head = `keepalive ${v.pings}/${v.limit}`
+  const head = `keepalive ${v.pings}/${v.limit}${v.spentUsd > 0 ? ` · ${money(v.spentUsd)} spent` : ''}`
 
   switch (v.kind) {
     case 'waiting':

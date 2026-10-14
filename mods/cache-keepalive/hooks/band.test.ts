@@ -48,3 +48,41 @@ test('the band line appears when armed, keeps the line beneath it, and goes when
   const disarmed = await $.ui.mount(BAND)
   expect(await disarmed.find({ type: 'Text', text: /keepalive/ })).toBeUndefined()
 })
+
+test('each ping raises a notification with what idling has cost so far', async ($, on) => {
+  const clock = mock.clock(on)
+  const cost = { usd: 1 }
+  const notes: string[] = []
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('settings.read', () => ({ value: {} }))
+  on('env.get', () => ({ value: undefined }))
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      cost: { ...cost },
+      context: { window: 1_000_000, breakdown: { model: 'us.anthropic.claude-opus-5-5' } },
+      rateLimits: [],
+    },
+  }) as never)
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('turn.complete', () => ({ text: '' }))
+  on('ui.notify', ($, e) => {
+    notes.push(`${e.title}: ${e.text}`)
+    return { value: { isSent: true, channel: 'iterm2' } } as never
+  })
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run(run('on'))
+  await clock.advance(271_000)
+  cost.usd = 1.03
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 'p1', reason: 'answer' } as never)
+
+  expect(notes).toEqual([
+    'Cache keep-alive: Idle: ping 1/24, $0.03 spent with nobody working; keeps the cache warm ~1h48m more. Reply, or /cache-keepalive off.',
+  ])
+  await clock.advance(1000)
+  const band = await $.ui.mount(BAND)
+  expect(await band.find({ type: 'Text', text: /^keepalive 1\/24 · \$0\.03 spent · next ping / })).toBeDefined()
+})

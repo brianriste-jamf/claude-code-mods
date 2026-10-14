@@ -47,13 +47,13 @@ test('clock_shouldFormatMinutesAndHours_whenGivenMilliseconds', () => {
 })
 
 test('describe_shouldNameTheNextPingAndWarmTime_whenWaiting', () => {
-  const line = describe({ kind: 'waiting', pings: 3, limit: 24, nextPingMs: 130_000, warmForMs: 5_640_000 })
+  const line = describe({ kind: 'waiting', pings: 3, limit: 24, spentUsd: 0, nextPingMs: 130_000, warmForMs: 5_640_000 })
   expect(line.color).toBe('success')
   expect(line.text).toBe('keepalive 3/24 · next ping 2:10 · keeps warm ~1h34m')
 })
 
 test('describe_shouldWarnInYellow_whenBudgetIsUsed', () => {
-  const line = describe({ kind: 'spent', pings: 24, limit: 24, lapsesInMs: 252_000 })
+  const line = describe({ kind: 'spent', pings: 24, limit: 24, spentUsd: 0.72, lapsesInMs: 252_000 })
   expect(line.color).toBe('warning')
-  expect(line.text).toBe('keepalive 24/24 · budget used, cache lapses in 4:12')
+  expect(line.text).toBe('keepalive 24/24 · $0.72 spent · budget used, cache lapses in 4:12')
 })
