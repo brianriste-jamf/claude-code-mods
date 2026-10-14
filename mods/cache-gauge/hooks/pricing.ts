@@ -31,10 +31,15 @@ export const ratesFor = (model: string): Rates =>
   FAMILIES.find(([pattern]) => pattern.test(model))?.[1] ?? DEFAULT_RATES
 
 /** One model under two spellings: a reply's id may carry a provider prefix (`us.anthropic.`) that `/model`'s does not. */
-export const isSameModel = (a: string, b: string): boolean =>
-  a === b || (a !== '' && b !== '' && (a.endsWith(`.${b}`) || b.endsWith(`.${a}`)))
+export const isSameModel = (a: string | undefined, b: string | undefined): boolean =>
+  a === b ||
+  (typeof a === 'string' &&
+    typeof b === 'string' &&
+    a !== '' &&
+    b !== '' &&
+    (a.endsWith(`.${b}`) || b.endsWith(`.${a}`)))
 
-export const writeRatio =(ttl: Ttl): number => (ttl === '1h' ? 2 : 1.25)
+export const writeRatio = (ttl: Ttl): number => (ttl === '1h' ? 2 : 1.25)
 
 export const ttlMs = (ttl: Ttl): number => (ttl === '1h' ? 3_600_000 : 300_000)
 

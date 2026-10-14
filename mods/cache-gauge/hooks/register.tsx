@@ -172,7 +172,7 @@ export const register: Register = (on, options) => {
     }
     const held = await read($, snapshot)
     const current = await $.session.model()
-    if (held !== null && !isSameModel(current, held.currentModel)) {
+    if (held !== null && typeof current === 'string' && !isSameModel(current, held.currentModel ?? held.model)) {
       const base = baseFor(current)
       await update($, snapshot, () => ({
         ...held,
