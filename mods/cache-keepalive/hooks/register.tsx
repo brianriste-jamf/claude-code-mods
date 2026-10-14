@@ -45,7 +45,7 @@ async function step($: EngineInterface, k: Keepalive) {
   }
 
   const p = plan(k.model, k.ttl, k.options)
-  const head = `keepalive[${p.ttl}] ${k.pings}/${p.limit}`
+  const head = `${NAME}[${p.ttl}] ${k.pings}/${p.limit}`
   const idle = (await $.clock.now()) - k.lastActivity
 
   if (k.isBusy) {

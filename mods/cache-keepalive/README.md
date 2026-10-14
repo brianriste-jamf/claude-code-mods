@@ -21,9 +21,9 @@ That ping is a real turn in the transcript. It costs a cache read of the context
 While armed, the status line shows its state:
 
 ```
-keepalive[5m] 3/24 · next 2:10 · 1h34m left
-keepalive[5m] 24/24 · budget used, lapses in 4:12
-keepalive[5m] 0/24 · cache cold
+cache-keepalive[5m] 3/24 · next 2:10 · 1h34m left
+cache-keepalive[5m] 24/24 · budget used, lapses in 4:12
+cache-keepalive[5m] 0/24 · cache cold
 ```
 
 ## When it stops pinging
