@@ -123,6 +123,13 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     k.lastActivity = await $.clock.now()
     await refreshTtl($, k)
+    // Priced from the start: an unknown model falls back to the 0.1x read price,
+    // which shrinks Opus 5.5's break-even budget from 24 pings to 11.
+    try {
+      k.model = (await $.session.usage({ breakdown: 'summary' })).context.breakdown?.model ?? k.model
+    } catch {
+      // Left unknown until the first reply names it.
+    }
 
     await $.command.register({
       name: NAME,

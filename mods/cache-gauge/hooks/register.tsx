@@ -153,13 +153,15 @@ export const register: Register = (on, options) => {
       const t = Math.max(await read($, now), snap.respondedAt)
       const leftMs = snap.respondedAt + ttlMs(ttl) - t
       const isWarm = leftMs > 0
-      const cold = `${snap.isCalibrated ? '' : '~'}${usd(nextCost(snap.ctxTokens, snap.baseUsd, snap.model, ttl).cold)}`
+      const cost = nextCost(snap.ctxTokens, snap.baseUsd, snap.model, ttl)
+      const price = (n: number) => `${snap.isCalibrated ? '' : '~'}${usd(n)}`
+      const cold = price(cost.cold)
       state = isWarm ? (
         <Text color={leftMs < ttlMs(ttl) * 0.2 ? 'warning' : 'success'}>{`● warm ${countdown(leftMs)}`}</Text>
       ) : (
         <Text color="error">○ cold</Text>
       )
-      consequence = isWarm ? ` · cold costs ${cold}` : ` · next msg re-writes ${tokens(snap.ctxTokens)} (${cold})`
+      consequence = isWarm ? ` · read ${price(cost.warm)} · cold ${cold}` : ` · next msg re-writes ${tokens(snap.ctxTokens)} (${cold})`
     }
 
     const mine = (

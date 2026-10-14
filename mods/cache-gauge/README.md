@@ -3,7 +3,7 @@
 One line above the Claude Code prompt that answers the two questions worth acting on: *should I reply before the cache goes cold?* and *how close am I to compaction?*
 
 ```
-● warm 4:40 · cold costs $1.56 · ctx 250k/367k ██████▊░░░ 68%
+● warm 4:40 · read $0.06 · cold $1.56 · ctx 250k/367k ██████▊░░░ 68%
 ○ cold · next msg re-writes 250k ($1.56) · ctx 250k/367k ██████▊░░░ 68%
 ```
 
@@ -12,7 +12,8 @@ One line above the Claude Code prompt that answers the two questions worth actin
 | `● warm 4:40` | Time until the prompt cache goes cold | green; yellow in the last 20% of the lifetime (the last minute on a 5m cache) |
 | `○ cold` | The cache has expired | red |
 | `◌ waiting for a reply` | Right after a start or reload: the context is known, the cache's state is not until a reply finishes | dim |
-| `cold costs $1.56` | What the next message pays to re-write the whole context if you let the cache lapse | |
+| `read $0.06` | What the next message pays to read the context from the warm cache | |
+| `cold $1.56` | What it pays instead to re-write the whole context if you let the cache lapse | |
 | `next msg re-writes 250k ($1.56)` | Once cold: what the next message will re-write, and its cost | |
 | `ctx 250k/367k` | Context of the last reply against where auto-compaction runs (set with `/autocompact`); against the model's window when auto-compaction is off | bar green < 50%, yellow < 80%, red above |
 

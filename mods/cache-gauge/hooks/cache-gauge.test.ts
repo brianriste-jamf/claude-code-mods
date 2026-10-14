@@ -100,8 +100,8 @@ test('the band shows the gauges after a turn and goes cold past the TTL', async 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...BAND, surface })
     expect(await ui.find({ type: 'Text', text: '● warm 5:00' })).toBeDefined()
-    // 0.099 / 24750 = 4e-6 per token; cold = 60000 * 1.25 * 4e-6
-    expect(await ui.find({ type: 'Text', text: ' · cold costs $0.30 · ctx 60k/200k ' })).toBeDefined()
+    // 0.099 / 24750 = 4e-6 per token; read = 60000 * 0.05 * 4e-6, cold = 60000 * 1.25 * 4e-6
+    expect(await ui.find({ type: 'Text', text: ' · read $0.01 · cold $0.30 · ctx 60k/200k ' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: ' 30%' })).toBeDefined()
     await ui.unmount()
   }
@@ -126,7 +126,7 @@ test('a subagent turn keeps the band unchanged and skips that calibration sample
   await $.turn.complete({ ...turn, turnId: 't1' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   // No calibrated sample yet: the price is the list price, marked as approximate.
-  expect(await ui.find({ type: 'Text', text: /cold costs ~\$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /read ~\$[\d.]+ · cold ~\$/ })).toBeDefined()
 })
 
 test('the command toggles the band', async ($, on) => {

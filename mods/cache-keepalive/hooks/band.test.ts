@@ -27,6 +27,9 @@ test('the band line appears when armed, keeps the line beneath it, and goes when
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('settings.read', () => ({ value: {} }))
   on('env.get', () => ({ value: undefined }))
+  on('session.usage', () => ({
+    value: { startedAt: 0, context: { window: 1_000_000, breakdown: { model: 'us.anthropic.claude-opus-5-5' } }, rateLimits: [] },
+  }) as never)
   // Another mod's line beneath this one.
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['● warm 4:40'] }))
 
@@ -37,7 +40,8 @@ test('the band line appears when armed, keeps the line beneath it, and goes when
   await $.command.run(run('on'))
   await clock.advance(60_000)
   const armed = await $.ui.mount(BAND)
-  expect(await armed.find({ type: 'Text', text: /^keepalive 0\/\d+ · next ping 3:30 · keeps warm ~/ })).toBeDefined()
+  // The model is known from the start, so the budget is Opus 5.5's 24, not the generic 11.
+  expect(await armed.find({ type: 'Text', text: /^keepalive 0\/24 · next ping 3:30 · keeps warm ~/ })).toBeDefined()
   expect(await armed.find({ type: 'Text', text: '● warm 4:40' })).toBeDefined()
 
   await $.command.run(run('off'))
