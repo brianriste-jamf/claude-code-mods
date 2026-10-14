@@ -10,7 +10,7 @@ next  █░░░░░░░░░░░░░░░░░░░  ~$0.04 (cold
 
 | Row | Shows | Colour |
 |---|---|---|
-| `ctx` | Input tokens of the last reply against the model's context window, and the auto-compaction threshold when auto-compaction is on | green < 50%, yellow < 80%, red above |
+| `ctx` | Input tokens of the last reply against the window auto-compaction measures against, and the compaction threshold when auto-compaction is on. When `/autocompact` set that window below the model's, the model's window follows as `model 1.0M` | green < 50%, yellow < 80%, red above |
 | `cache` | Share of the last reply's input served from cache, and a countdown until the cache goes cold | by hit ratio while warm; red once cold |
 | `next` | Estimated cost of re-sending the current context on the next message: as a cache read while warm, as a cache write once cold. Then the session total | against `maxRequestUsd` |
 
@@ -36,6 +36,5 @@ The estimate starts from list prices per model family (Opus, Sonnet, Haiku, Fabl
 
 ## Known limitations
 
-- The `ctx` percentage is measured against the model's full window, not the smaller window auto-compaction measures against, so the bar can still be green shortly before compaction runs. A fix is planned; `/cache-gauge debug` shows both figures.
 - `ctx` counts the input side of the last reply; the reply's own output, which the next request also sends, is not included.
-- After `/compact` the gauges keep the pre-compaction figures until the next reply finishes.
+- The gauges refresh when a reply finishes. After `/compact` or `/autocompact` they show the old figures until the next reply.

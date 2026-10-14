@@ -1,7 +1,10 @@
 export type Snapshot = {
   /** Input tokens of the last main-loop response (what the next request re-sends). */
   ctxTokens: number
+  /** The model's context window. */
   window: number
+  /** The window auto-compaction measures against (`/autocompact`), when known; may be smaller than `window`. */
+  compactWindow: number | null
   /** Auto-compact threshold in tokens, when auto-compaction is on. */
   compactAt: number | null
   /** cache_read / all input tokens of the last turn, 0..1. */

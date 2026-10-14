@@ -183,3 +183,37 @@ test('the band still goes cold when the machine slept through the TTL', async ($
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /hit · cold/ })).toBeDefined()
 })
+
+test('ctx is measured against a compaction window smaller than the model window', async ($, on) => {
+  mock.clock(on)
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      context: {
+        tokens: 238_000,
+        window: 1_000_000,
+        percent: 24,
+        breakdown: { rawMaxTokens: 400_000, autoCompactThreshold: 367_000, isAutoCompactEnabled: true },
+      },
+      rateLimits: [],
+      cost: { usd: 0.099 },
+    },
+  }) as never)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('ui.render', () => ({ type: 'Box', children: [] }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({
+    answer: '',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 't1',
+    reason: 'answer',
+    usage: TURN_USAGE,
+  })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /238k\/400k {2}60% · compact at 367k · model 1\.0M/ })).toBeDefined()
+})

@@ -102,6 +102,7 @@ export const register: Register = (on, options) => {
     const fresh: Snapshot = {
       ctxTokens: usage.context.tokens ?? 0,
       window: usage.context.window,
+      compactWindow: breakdown?.rawMaxTokens ?? null,
       compactAt: breakdown?.isAutoCompactEnabled ? (breakdown.autoCompactThreshold ?? null) : null,
       hitRatio: hitRatio(e.usage),
       respondedAt,
@@ -128,8 +129,13 @@ export const register: Register = (on, options) => {
     const leftMs = snap.respondedAt + ttlMs(ttl) - t
     const isWarm = leftMs > 0
 
-    const ctx = snap.window > 0 ? snap.ctxTokens / snap.window : 0
+    // Fill is what is left before compaction, so it is measured against the
+    // compaction window whenever /autocompact made it smaller than the model's.
+    const isNarrowed = snap.compactWindow !== null && snap.compactWindow > 0 && snap.compactWindow < snap.window
+    const limit = isNarrowed ? (snap.compactWindow ?? snap.window) : snap.window
+    const ctx = limit > 0 ? snap.ctxTokens / limit : 0
     const compact = snap.compactAt ? ` · compact at ${tokens(snap.compactAt)}` : ''
+    const model = isNarrowed ? ` · model ${tokens(snap.window)}` : ''
 
     const cost = nextCost(snap.ctxTokens, snap.baseUsd, snap.model, ttl)
     const estimate = isWarm ? cost.warm : cost.cold
@@ -141,7 +147,7 @@ export const register: Register = (on, options) => {
           <Text>ctx   </Text>
           <Text color={level(ctx, 0.5, 0.8)}>{bar(ctx)}</Text>
           <Text dimColor>
-            {`  ${tokens(snap.ctxTokens)}/${tokens(snap.window)}  ${Math.round(ctx * 100)}%${compact}`}
+            {`  ${tokens(snap.ctxTokens)}/${tokens(limit)}  ${Math.round(ctx * 100)}%${compact}${model}`}
           </Text>
         </Box>
         <Box>
