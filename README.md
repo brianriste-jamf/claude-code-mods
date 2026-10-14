@@ -7,7 +7,7 @@ Every message resends the whole conversation. While the prompt cache is warm, th
 | Mod | What it does | Command |
 |---|---|---|
 | [**cache-gauge**](mods/cache-gauge) | Three live gauges above the prompt: context fill, cache warm/cold countdown, and the estimated cost of the next request | `/cache-gauge` |
-| [**cache-keepalive**](mods/cache-keepalive) | Keeps the cache warm with a cheap ping while the session is idle, and stops once a cold cache would have been cheaper | `/keepalive on \| off \| status` |
+| [**cache-keepalive**](mods/cache-keepalive) | Keeps the cache warm with a cheap ping while the session is idle, and stops once a cold cache would have been cheaper | `/cache-keepalive on \| off \| status` |
 
 ```
 ctx   ████░░░░░░░░░░░░░░░░  187k/1.0M  19% · compact at 830k
@@ -53,7 +53,7 @@ Both mods have options (see each mod's README). Set them with `/plugin configure
 `cache-gauge` shows the countdown; `cache-keepalive` acts on it. A typical setup:
 
 1. Leave `cache-gauge` on all the time.
-2. Before a meeting or a long read, run `/keepalive on`. The gauge stays `warm` while you are away, and each ping shows up in the transcript as a one-word turn.
+2. Before a meeting or a long read, run `/cache-keepalive on`. The gauge stays `warm` while you are away, and each ping shows up in the transcript as a one-word turn.
 3. Back at the keyboard, just type: your own message resets the ping budget.
 
 ## Develop

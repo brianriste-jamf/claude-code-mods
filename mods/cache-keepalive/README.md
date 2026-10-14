@@ -14,9 +14,9 @@ That ping is a real turn in the transcript. It costs a cache read of the context
 
 | Command | Does |
 |---|---|
-| `/keepalive on` | Arm it for this session |
-| `/keepalive off` | Disarm it |
-| `/keepalive status` | Model, cache lifetime and where it was read from, pings used / budget, spacing |
+| `/cache-keepalive on` | Arm it for this session |
+| `/cache-keepalive off` | Disarm it |
+| `/cache-keepalive status` | Model, cache lifetime and where it was read from, pings used / budget, spacing |
 
 While armed, the status line shows its state:
 

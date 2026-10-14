@@ -112,8 +112,8 @@ export const register: Register = (on, options) => {
     await refreshTtl($, k)
 
     await $.command.register({
-      name: 'keepalive',
-      description: 'Keep the prompt cache warm while idle: /keepalive on | off | status',
+      name: NAME,
+      description: 'Keep the prompt cache warm while idle: /cache-keepalive on | off | status',
     })
 
     $.clock.every(TICK_MS, () => void step($, k))
@@ -149,7 +149,7 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('command.run', { command: 'keepalive' }, async ($, e) => {
+  on('command.run', { command: NAME }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
 
     if (arg === 'on') {
