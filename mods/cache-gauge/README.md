@@ -33,6 +33,19 @@ The line refreshes after every model request, so a long turn of tool calls keeps
 | Option | Default | Meaning |
 |---|---|---|
 | `cacheTtl` | `5m` | How long the cache stays warm after a reply: `5m` or `1h`. Match it to the TTL your Claude Code session actually requests |
+| `position` | `above` | `above`: the full gauge in a band above the prompt. `hint`: the compact form below, at the end of the hint line under the prompt |
+
+## Position `hint`
+
+With `position` set to `hint`, the gauge is drawn at the end of the hint line under the prompt, with no price and no bar:
+
+```
+● warm 4:40 · ctx 250k/367k 68%
+```
+
+- No colour: the hint line is one string.
+- Cut where the row ends on a narrow terminal.
+- `ctx` and the cache state only; the `next msg` price is shown in `above` mode.
 
 ## How the cost is estimated
 

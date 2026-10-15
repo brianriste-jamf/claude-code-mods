@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { On, Register } from 'claude-code'
 
 import type { Snapshot } from '../types'
 import {
@@ -22,8 +22,96 @@ const snapshot = atom({ plugin: 'cache-gauge', key: 'snapshot' } as const, null)
 const isHidden = atom({ plugin: 'cache-gauge', key: 'isHidden' } as const, false)
 const now = atom({ plugin: 'cache-gauge', key: 'now' } as const, 0)
 
+const onAbovePrompt = (on: On, ttl: Ttl) => {
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const snap = await read($, snapshot)
+    if (e.props.hasSurvey || snap === null || (await read($, isHidden))) {
+      return next(e)
+    }
+
+    const { Box, Text } = $.ui.resolve(e)
+
+    // Fill toward where compaction runs (/autocompact moves it), else the model's window.
+    const limit = snap.compactAt ?? snap.window
+    const ctx = limit > 0 ? snap.ctxTokens / limit : 0
+    const ctxPart = ` · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} `
+
+    let state
+    let consequence
+    if (snap.respondedAt === null) {
+      state = <Text dimColor>◌ waiting for a reply</Text>
+      consequence = ''
+    } else {
+      const t = Math.max(await read($, now), snap.respondedAt)
+      const leftMs = snap.respondedAt + ttlMs(ttl) - t
+      const current = snap.currentModel ?? snap.model
+      const isWarm = !snap.isCompacted && isSameModel(current, snap.model) && leftMs > 0
+      const cost = nextCost(snap.ctxTokens, snap.baseUsd, current, ttl)
+      const price = (n: number) => `${snap.isCalibrated ? '' : '~'}${usd(n)}`
+      const cold = price(cost.cold)
+      state = isWarm ? (
+        // Mid-turn every request restarts the lifetime: count down only once idle.
+        e.props.isWorking ? (
+          <Text color="success">● warm</Text>
+        ) : (
+          <Text color={leftMs < ttlMs(ttl) * 0.2 ? 'warning' : 'success'}>{`● warm ${countdown(leftMs)}`}</Text>
+        )
+      ) : (
+        <Text color="error">○ cold</Text>
+      )
+      consequence = isWarm ? ` · next msg ${price(cost.warm)} (cold ${cold})` : ` · next msg ${cold}`
+    }
+
+    const mine = (
+      <Box>
+        {state}
+        <Text dimColor>{`${consequence}${ctxPart}`}</Text>
+        <Text color={level(ctx, 0.5, 0.8)}>{bar(ctx)}</Text>
+        <Text dimColor>{` ${Math.round(ctx * 100)}%`}</Text>
+      </Box>
+    )
+    // Wrap, not replace: another mod's line (cache-keepalive) stays in the band.
+    const below = await next(e)
+
+    return below ? (
+      <Box flexDirection="column">
+        {mine}
+        {below}
+      </Box>
+    ) : (
+      mine
+    )
+  })
+}
+
+const onPromptHint = (on: On, ttl: Ttl) => {
+  // Dim tail on the hint line under the prompt: cache state and context fill only.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const snap = await read($, snapshot)
+    if (snap === null || (await read($, isHidden))) {
+      return next(e)
+    }
+
+    const limit = snap.compactAt ?? snap.window
+    const ctx = limit > 0 ? snap.ctxTokens / limit : 0
+    let state = '◌ waiting'
+    if (snap.respondedAt !== null) {
+      const t = Math.max(await read($, now), snap.respondedAt)
+      const leftMs = snap.respondedAt + ttlMs(ttl) - t
+      const isWarm = !snap.isCompacted && isSameModel(snap.currentModel ?? snap.model, snap.model) && leftMs > 0
+      // Mid-turn every request restarts the lifetime: count down only once idle.
+      state = isWarm ? (e.props.isWorking ? '● warm' : `● warm ${countdown(leftMs)}`) : '○ cold'
+    }
+    const mine = `${state} · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} ${Math.round(ctx * 100)}%`
+    const tail = e.props.tail ? `${e.props.tail} · ${mine}` : `  ${mine}`
+
+    return next({ ...e, props: { ...e.props, tail } })
+  })
+}
+
 export const register: Register = (on, options) => {
   const ttl: Ttl = options.cacheTtl === '1h' ? '1h' : '5m'
+  const position = options.position === 'hint' ? 'hint' : 'above'
   let lastUsd = 0
   // Calibrated per model: a /model switch must not price one model at another's rate.
   const bases = new Map<string, number>()
@@ -33,7 +121,7 @@ export const register: Register = (on, options) => {
   let drawnAt = 0
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: PLUGIN, description: 'Show or hide the cache gauges above the prompt' })
+    await $.command.register({ name: PLUGIN, description: 'Show or hide the cache gauge' })
     const usage = await $.session.usage({ breakdown: 'summary' })
     lastUsd = usage.cost?.usd ?? 0
     // Draw the context at once (a reload, a resumed session) rather than after the
@@ -220,63 +308,9 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const snap = await read($, snapshot)
-    if (e.props.hasSurvey || snap === null || (await read($, isHidden))) {
-      return next(e)
-    }
-
-    const { Box, Text } = $.ui.resolve(e)
-
-    // Fill toward where compaction runs (/autocompact moves it), else the model's window.
-    const limit = snap.compactAt ?? snap.window
-    const ctx = limit > 0 ? snap.ctxTokens / limit : 0
-    const ctxPart = ` · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} `
-
-    let state
-    let consequence
-    if (snap.respondedAt === null) {
-      state = <Text dimColor>◌ waiting for a reply</Text>
-      consequence = ''
-    } else {
-      const t = Math.max(await read($, now), snap.respondedAt)
-      const leftMs = snap.respondedAt + ttlMs(ttl) - t
-      const current = snap.currentModel ?? snap.model
-      const isWarm = !snap.isCompacted && isSameModel(current, snap.model) && leftMs > 0
-      const cost = nextCost(snap.ctxTokens, snap.baseUsd, current, ttl)
-      const price = (n: number) => `${snap.isCalibrated ? '' : '~'}${usd(n)}`
-      const cold = price(cost.cold)
-      state = isWarm ? (
-        // Mid-turn every request restarts the lifetime: count down only once idle.
-        e.props.isWorking ? (
-          <Text color="success">● warm</Text>
-        ) : (
-          <Text color={leftMs < ttlMs(ttl) * 0.2 ? 'warning' : 'success'}>{`● warm ${countdown(leftMs)}`}</Text>
-        )
-      ) : (
-        <Text color="error">○ cold</Text>
-      )
-      consequence = isWarm ? ` · next msg ${price(cost.warm)} (cold ${cold})` : ` · next msg ${cold}`
-    }
-
-    const mine = (
-      <Box>
-        {state}
-        <Text dimColor>{`${consequence}${ctxPart}`}</Text>
-        <Text color={level(ctx, 0.5, 0.8)}>{bar(ctx)}</Text>
-        <Text dimColor>{` ${Math.round(ctx * 100)}%`}</Text>
-      </Box>
-    )
-    // Wrap, not replace: another mod's line (cache-keepalive) stays in the band.
-    const below = await next(e)
-
-    return below ? (
-      <Box flexDirection="column">
-        {mine}
-        {below}
-      </Box>
-    ) : (
-      mine
-    )
-  })
+  if (position === 'above') {
+    onAbovePrompt(on, ttl)
+  } else {
+    onPromptHint(on, ttl)
+  }
 }

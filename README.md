@@ -14,7 +14,7 @@ Every message resends the whole conversation. While the prompt cache is warm, th
 ↻ keepalive 3/24 · next ping 2:10 · keeps warm ~1h34m
 ```
 
-The first line is `cache-gauge`, the second `cache-keepalive` while it is armed. Each mod draws its own line and keeps the other's, so either works alone.
+The first line is `cache-gauge`, the second `cache-keepalive` while it is armed. Each mod draws its own line and keeps the other's, so either works alone. Set `cache-gauge`'s `position` option to `hint` to move it to the hint line under the prompt.
 
 ## Install
 

@@ -13,17 +13,11 @@ const TURN_USAGE = {
   cache_creation_input_tokens: 9000,
   model: OPUS,
 }
-const BAND = {
+const HINT_OPTIONS = { position: 'hint' } as const
+const HINT = {
   plugin: 'cache-gauge',
-  component: 'AbovePrompt',
-  props: {
-    hasSurvey: false,
-    isWorking: false,
-    maxRows: 10,
-    bodyColumns: 120,
-    scroll: { offset: 0, bodyRows: 10 },
-    view: {},
-  },
+  component: 'PromptHint',
+  props: { isDraft: false, isWorking: false, hint: '? for shortcuts' },
 } as const
 
 test('rates pick the model family, most specific first', () => {
@@ -63,8 +57,295 @@ test('bars clamp and levels switch at their thresholds', () => {
   expect(level(0.8, 0.5, 0.8)).toBe('error')
 })
 
+// The tail the hook hands to the engine's PromptHint, captured by the terminal handler below.
+let tail: string | undefined
+
+const captureTail = (on: On) =>
+  on('ui.render', (_$, e) => {
+    tail = (e.props as { tail?: string }).tail
+
+    return { type: 'Box', children: [] }
+  })
+
 // What the engine would answer beneath the mod.
-const answerUsage = (on: On, cost: { usd: number }, below: object = { type: 'Box', children: [] }) => {
+const answerUsage = (on: On, cost: { usd: number }) => {
+  const clock = mock.clock(on)
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      context: { tokens: 60_000, window: 200_000, percent: 30 },
+      rateLimits: [],
+      cost: { ...cost },
+    },
+  }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  captureTail(on)
+
+  return clock
+}
+
+// Mounts the hint with the given props and returns the tail the mod passed on (undefined when it passed none).
+const hintTail = async (
+  mount: (view: object) => Promise<unknown>,
+  props: object = {},
+  surface: 'terminal' | 'desktop' = 'terminal',
+) => {
+  tail = undefined
+  await mount({ ...HINT, surface, props: { ...HINT.props, ...props } })
+
+  return tail
+}
+
+test('the hint shows the gauge after a turn and goes cold past the TTL', { options: HINT_OPTIONS }, async ($, on) => {
+  const cost = { usd: 0 }
+  const clock = answerUsage(on, cost)
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  cost.usd = 0.099
+  await $.turn.complete({
+    answer: '',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 't1',
+    reason: 'answer',
+    usage: TURN_USAGE,
+  })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    expect(await hintTail(v => $.ui.mount(v), {}, surface)).toBe('  ● warm 5:00 · ctx 60k/200k 30%')
+  }
+
+  await clock.advance(301_000)
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · ctx 60k/200k 30%')
+})
+
+test('a subagent turn keeps the hint unchanged', { options: HINT_OPTIONS }, async ($, on) => {
+  const cost = { usd: 0 }
+  answerUsage(on, cost)
+  on('turn.complete', () => ({ text: '' }))
+
+  const turn = { answer: '', durationMs: 1, isAborted: false, reason: 'answer', usage: TURN_USAGE } as const
+  await $.turn.complete({ ...turn, turnId: 's1', agentId: 'sub' })
+  expect(await hintTail(v => $.ui.mount(v))).toBeUndefined()
+
+  cost.usd = 5
+  await $.turn.complete({ ...turn, turnId: 't1' })
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 5:00 · ctx 60k/200k 30%')
+})
+
+test('the command toggles the hint', { options: HINT_OPTIONS }, async ($, on) => {
+  answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  const toggle = () =>
+    $.command.run({
+      command: 'cache-gauge',
+      args: '',
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: false, columns: 120 },
+    })
+
+  await toggle()
+  expect(await hintTail(v => $.ui.mount(v))).toBeUndefined()
+
+  await toggle()
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 5:00 · ctx 60k/200k 30%')
+})
+
+test('the hint still goes cold when the machine slept through the TTL', { options: HINT_OPTIONS }, async ($, on) => {
+  // A hand-driven clock: a sleep moves the wall clock with no tick in between.
+  let t = 0
+  let periods: Array<() => void> = []
+  const tick = async () => {
+    const due = periods
+    periods = []
+    due.forEach(resolve => resolve())
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+  on('clock.now', () => ({ value: t }))
+  on('clock.every', () => new Promise<{ value: undefined }>(resolve => periods.push(() => resolve({ value: undefined }))))
+  on('session.usage', () => ({
+    value: { startedAt: 0, context: { tokens: 60_000, window: 200_000, percent: 30 }, rateLimits: [], cost: { usd: 0.099 } },
+  }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  captureTail(on)
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({
+    answer: '',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 't1',
+    reason: 'answer',
+    usage: TURN_USAGE,
+  })
+  t = 60_000
+  await tick()
+
+  t += 3_600_000
+  await tick()
+
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · ctx 60k/200k 30%')
+})
+
+test('ctx is measured against the compaction threshold', { options: HINT_OPTIONS }, async ($, on) => {
+  mock.clock(on)
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      context: {
+        tokens: 238_000,
+        window: 1_000_000,
+        percent: 24,
+        breakdown: { rawMaxTokens: 400_000, autoCompactThreshold: 367_000, isAutoCompactEnabled: true },
+      },
+      rateLimits: [],
+      cost: { usd: 0.099 },
+    },
+  }) as never)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  captureTail(on)
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({
+    answer: '',
+    durationMs: 1,
+    isAborted: false,
+    turnId: 't1',
+    reason: 'answer',
+    usage: TURN_USAGE,
+  })
+
+  // Measured against where compaction runs, not the model's 1M or the 400k window.
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 5:00 · ctx 238k/367k 65%')
+})
+
+test('the hint draws the context at start, before any reply', { options: HINT_OPTIONS }, async ($, on) => {
+  answerUsage(on, { usd: 0 })
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ◌ waiting · ctx 60k/200k 30%')
+})
+
+test('show and hide set the hint, a bare command toggles it', { options: HINT_OPTIONS }, async ($, on) => {
+  answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  const run = async (args: string) => {
+    await $.command.run({
+      command: 'cache-gauge',
+      args,
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: false, columns: 120 },
+    })
+
+    return (await hintTail(v => $.ui.mount(v))) !== undefined
+  }
+
+  expect(await run('show')).toBe(true)
+  expect(await run('show')).toBe(true)
+  expect(await run('hide')).toBe(false)
+  expect(await run('hide')).toBe(false)
+  expect(await run('')).toBe(true)
+})
+
+test('an existing tail is preserved and the gauge appended after ` · `', { options: HINT_OPTIONS }, async ($, on) => {
+  answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  expect(await hintTail(v => $.ui.mount(v), { tail: '↻ keepalive 3/24' })).toBe(
+    '↻ keepalive 3/24 · ● warm 5:00 · ctx 60k/200k 30%',
+  )
+})
+
+test('a compaction redraws the context and the cache as cold', { options: HINT_OPTIONS }, async ($, on) => {
+  answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  const summary = [{ role: 'user', text: 'summary', toolUses: [] }] as const
+  on('session.compact', () => ({ messages: summary, tokensBefore: 60_000, tokensAfter: 12_000 }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  await $.session.compact({ trigger: 'manual', messages: summary })
+
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · ctx 12k/200k 6%')
+})
+
+test('a /model switch leaves the other model cold until switched back', { options: HINT_OPTIONS }, async ($, on) => {
+  const cost = { usd: 0 }
+  answerUsage(on, cost)
+  on('turn.complete', () => ({ text: '' }))
+  let model = OPUS
+  on('session.model', () => ({ value: model }))
+  on('command.run', { command: 'model' }, () => ({ text: '' }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  cost.usd = 0.099
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  const switchTo = (to: string) => {
+    model = to
+
+    return $.command.run({
+      command: 'model',
+      args: to,
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: false, columns: 120 },
+    })
+  }
+
+  await switchTo('claude-sonnet-5-5')
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · ctx 60k/200k 30%')
+
+  await switchTo(OPUS)
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 5:00 · ctx 60k/200k 30%')
+})
+
+test('each request of a long turn restarts the countdown', { options: HINT_OPTIONS }, async ($, on) => {
+  const clock = answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  const step = { turnId: 't2', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: TURN_USAGE } as const
+  on('turn.step', async function* () {
+    return step
+  })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  await clock.advance(200_000)
+  // The step streams: drain it so the hooks run to its result.
+  for await (const chunk of $.turn.step({ turnId: 't2', index: 0, model: OPUS, messageCount: 3 })) {
+    void chunk
+  }
+  await clock.advance(200_000)
+
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 1:40 · ctx 60k/200k 30%')
+
+  // While the turn runs the countdown would only keep resetting, so it is left out.
+  expect(await hintTail(v => $.ui.mount(v), { isWorking: true })).toBe('  ● warm · ctx 60k/200k 30%')
+})
+
+const BAND = {
+  plugin: 'cache-gauge',
+  component: 'AbovePrompt',
+  props: {
+    hasSurvey: false,
+    isWorking: false,
+    maxRows: 10,
+    bodyColumns: 120,
+    scroll: { offset: 0, bodyRows: 10 },
+    view: {},
+  },
+} as const
+
+
+const bandUsage = (on: On, cost: { usd: number }, below: object = { type: 'Box', children: [] }) => {
   const clock = mock.clock(on)
   on('session.usage', () => ({
     value: {
@@ -83,7 +364,7 @@ const answerUsage = (on: On, cost: { usd: number }, below: object = { type: 'Box
 
 test('the band shows the gauges after a turn and goes cold past the TTL', async ($, on) => {
   const cost = { usd: 0 }
-  const clock = answerUsage(on, cost)
+  const clock = bandUsage(on, cost)
   on('turn.complete', () => ({ text: '' }))
 
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
@@ -114,7 +395,7 @@ test('the band shows the gauges after a turn and goes cold past the TTL', async 
 
 test('a subagent turn keeps the band unchanged and skips that calibration sample', async ($, on) => {
   const cost = { usd: 0 }
-  answerUsage(on, cost)
+  bandUsage(on, cost)
   on('turn.complete', () => ({ text: '' }))
 
   const turn = { answer: '', durationMs: 1, isAborted: false, reason: 'answer', usage: TURN_USAGE } as const
@@ -130,7 +411,7 @@ test('a subagent turn keeps the band unchanged and skips that calibration sample
 })
 
 test('the command toggles the band', async ($, on) => {
-  answerUsage(on, { usd: 0.099 })
+  bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
 
@@ -227,7 +508,7 @@ test('ctx is measured against the compaction threshold', async ($, on) => {
 })
 
 test('the band draws the context at start, before any reply', async ($, on) => {
-  answerUsage(on, { usd: 0 })
+  bandUsage(on, { usd: 0 })
 
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
 
@@ -237,7 +518,7 @@ test('the band draws the context at start, before any reply', async ($, on) => {
 })
 
 test('show and hide set the band, a bare command toggles it', async ($, on) => {
-  answerUsage(on, { usd: 0.099 })
+  bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
   const run = async (args: string) => {
@@ -260,7 +541,7 @@ test('show and hide set the band, a bare command toggles it', async ($, on) => {
 })
 
 test('the band keeps the line another mod draws beneath it', async ($, on) => {
-  answerUsage(on, { usd: 0.099 }, { type: 'Text', props: {}, children: ['↻ keepalive 3/24'] })
+  bandUsage(on, { usd: 0.099 }, { type: 'Text', props: {}, children: ['↻ keepalive 3/24'] })
   on('turn.complete', () => ({ text: '' }))
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
 
@@ -270,7 +551,7 @@ test('the band keeps the line another mod draws beneath it', async ($, on) => {
 })
 
 test('a compaction redraws the context and the cache as cold', async ($, on) => {
-  answerUsage(on, { usd: 0.099 })
+  bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   const summary = [{ role: 'user', text: 'summary', toolUses: [] }] as const
   on('session.compact', () => ({ messages: summary, tokensBefore: 60_000, tokensAfter: 12_000 }))
@@ -286,7 +567,7 @@ test('a compaction redraws the context and the cache as cold', async ($, on) => 
 
 test('a /model switch prices the other model and leaves its cache cold until switched back', async ($, on) => {
   const cost = { usd: 0 }
-  answerUsage(on, cost)
+  bandUsage(on, cost)
   on('turn.complete', () => ({ text: '' }))
   let model = OPUS
   on('session.model', () => ({ value: model }))
@@ -319,7 +600,7 @@ test('a /model switch prices the other model and leaves its cache cold until swi
 })
 
 test('each request of a long turn restarts the countdown', async ($, on) => {
-  const clock = answerUsage(on, { usd: 0.099 })
+  const clock = bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   const step = { turnId: 't2', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: TURN_USAGE } as const
   on('turn.step', async function* () {
@@ -342,4 +623,22 @@ test('each request of a long turn restarts the countdown', async ($, on) => {
   // While the turn runs the countdown would only keep resetting, so it is left out.
   const working = await $.ui.mount({ ...BAND, props: { ...BAND.props, isWorking: true }, surface: 'terminal' })
   expect(await working.find({ type: 'Text', text: '● warm' })).toBeDefined()
+})
+
+test('default options leave PromptHint to the engine: no tail is set', async ($, on) => {
+  answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  expect(await hintTail(v => $.ui.mount(v))).toBeUndefined()
+})
+
+test('position hint leaves AbovePrompt to the engine: nothing of the band is drawn', { options: HINT_OPTIONS }, async ($, on) => {
+  answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /warm/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /ctx/ })).toBeUndefined()
 })
