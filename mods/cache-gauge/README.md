@@ -53,18 +53,18 @@ Inside a [herdr](https://herdr.dev) pane (`HERDR_PANE_ID` set), the gauge also r
 
 | Token | Values |
 |---|---|
-| `cache` | `warm`, `cold`, or `waiting` (no reply yet, as in `◌ waiting for a reply`) |
+| `cache` | `warm 5m` … `warm 2m` while idle (minutes left, rounded up), `warm <1m` for the last minute, plain `warm` mid-turn, `cold`, or `waiting` (no reply yet, as in `◌ waiting for a reply`) |
 | `ctx` | The context fill as a whole percent, a bare number such as `68`, so numeric rules (`gt`) apply |
 
-`cache=warm` carries `--ttl-ms` set to the lifetime left, as a backstop: herdr deletes an expired token, and the gauge sends `cache=cold` itself when the lifetime runs out. `ctx` is sent separately, with no TTL. Tokens go out at start, after each reply, a compaction or a `/model` switch, and when the cache goes cold; an unchanged value is not sent again.
+A `warm` value carries `--ttl-ms` set to the lifetime left, as a backstop: herdr deletes an expired token, and the gauge sends `cache=cold` itself when the lifetime runs out. `ctx` is sent separately, with a 24 h backstop so a crashed session's value goes eventually. Tokens go out at start, when the countdown text changes (about once a minute), after each reply, a compaction or a `/model` switch, and when the cache goes cold; an unchanged value is not sent again. Both tokens are cleared when the session ends.
 
-Show them in herdr's Agent sidebar:
+Show them in herdr's Agent sidebar (the first matching rule wins, so `warm <1m` precedes the `warm` prefix):
 
 ```toml
 [ui.sidebar.agents]
 rows = [
   ["state_icon", "machine", "workspace", "tab"],
-  ["agent", { token = "$cache", rules = [{ equals = "cold", fg = "#f55" }, { equals = "warm", fg = "#5c5" }] },
+  ["agent", { token = "$cache", rules = [{ starts_with = "cold", fg = "#f55" }, { equals = "warm <1m", fg = "#fc0" }, { starts_with = "warm", fg = "#5c5" }] },
             { token = "$ctx", rules = [{ gt = 80, fg = "#f55" }, { gt = 50, fg = "#fc0" }] }],
 ]
 ```

@@ -645,6 +645,7 @@ test('position hint leaves AbovePrompt to the engine: nothing of the band is dra
 
 // herdr: the process.run beneath the mod answers `printf $HERDR_PANE_ID` with `pane` and records the report calls.
 const PANE = 'w4:p1'
+const DAY = '86400000'
 const REPORT = ['herdr', 'pane', 'report-metadata', PANE, '--source', 'cache-gauge', '--token']
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } }) as never
 const herdrCalls = (on: On, pane: string, isBroken = false) => {
@@ -684,11 +685,11 @@ test('in herdr the start reports waiting, a reply reports warm with its lifetime
 
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   await flush()
-  expect(calls).toEqual([[...REPORT, 'cache=waiting'], [...REPORT, 'ctx=30']])
+  expect(calls).toEqual([[...REPORT, 'cache=waiting'], [...REPORT, 'ctx=30', '--ttl-ms', DAY]])
 
   await reply($)
   await flush()
-  expect(calls.slice(2)).toEqual([[...REPORT, 'cache=warm', '--ttl-ms', '300000']])
+  expect(calls.slice(2)).toEqual([[...REPORT, 'cache=warm 5m', '--ttl-ms', '300000']])
 })
 
 test('the warm token carries the time left, and the TTL crossing reports cold without one', async ($, on) => {
@@ -714,7 +715,7 @@ test('the warm token carries the time left, and the TTL crossing reports cold wi
   await switchTo('claude-sonnet-5-5')
   await switchTo(OPUS)
   await flush()
-  expect(calls.slice(-2)).toEqual([[...REPORT, 'cache=cold'], [...REPORT, 'cache=warm', '--ttl-ms', '200000']])
+  expect(calls.slice(-2)).toEqual([[...REPORT, 'cache=cold'], [...REPORT, 'cache=warm 4m', '--ttl-ms', '200000']])
 
   await clock.advance(201_000)
   await flush()
@@ -730,13 +731,13 @@ test('values that did not change are not sent again; a new reply refreshes the w
   await flush()
   const sent = calls.length
 
-  await clock.advance(60_000)
+  await clock.advance(30_000)
   await flush()
   expect(calls.length).toBe(sent)
 
   await reply($)
   await flush()
-  expect(calls.slice(sent)).toEqual([[...REPORT, 'cache=warm', '--ttl-ms', '300000']])
+  expect(calls.slice(sent)).toEqual([[...REPORT, 'cache=warm 5m', '--ttl-ms', '300000']])
 })
 
 test('a compaction reports cold and the new context', async ($, on) => {
@@ -753,7 +754,7 @@ test('a compaction reports cold and the new context', async ($, on) => {
   await $.session.compact({ trigger: 'manual', messages: summary })
   await flush()
 
-  expect(calls.slice(sent)).toEqual([[...REPORT, 'cache=cold'], [...REPORT, 'ctx=6']])
+  expect(calls.slice(sent)).toEqual([[...REPORT, 'cache=cold'], [...REPORT, 'ctx=6', '--ttl-ms', DAY]])
 })
 
 test('a herdr that fails leaves the gauge drawing', async ($, on) => {
@@ -768,4 +769,73 @@ test('a herdr that fails leaves the gauge drawing', async ($, on) => {
   expect(calls.length > 0).toBe(true)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: '● warm 5:00' })).toBeDefined()
+})
+
+test('the countdown steps once a minute, ends at <1m, then cold', async ($, on) => {
+  const calls = herdrCalls(on, PANE)
+  const clock = bandUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await reply($)
+  await clock.advance(301_000)
+  await flush()
+
+  // Each text once, however many ticks pass in its minute; a warm one carries the time left.
+  expect(calls.filter(c => c.some(a => a.startsWith('cache='))).map(c => c.slice(7))).toEqual([
+    ['cache=waiting'],
+    ['cache=warm 5m', '--ttl-ms', '300000'],
+    ['cache=warm 4m', '--ttl-ms', '240000'],
+    ['cache=warm 3m', '--ttl-ms', '180000'],
+    ['cache=warm 2m', '--ttl-ms', '120000'],
+    ['cache=warm <1m', '--ttl-ms', '60000'],
+    ['cache=cold'],
+  ])
+})
+
+test('mid-turn the cache token is plain warm, and the countdown returns with the turn end', async ($, on) => {
+  const calls = herdrCalls(on, PANE)
+  const clock = bandUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  const step = { turnId: 't2', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: TURN_USAGE } as const
+  on('turn.step', async function* () {
+    return step
+  })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await reply($)
+  await clock.advance(30_000)
+  for await (const chunk of $.turn.step({ turnId: 't2', index: 0, model: OPUS, messageCount: 3 })) {
+    void chunk
+  }
+  await clock.advance(100_000)
+  await flush()
+  expect(calls.at(-1)).toEqual([...REPORT, 'cache=warm', '--ttl-ms', '300000'])
+
+  await reply($)
+  await flush()
+  expect(calls.at(-1)).toEqual([...REPORT, 'cache=warm 5m', '--ttl-ms', '300000'])
+})
+
+test('the end of the session clears both tokens', async ($, on) => {
+  const calls = herdrCalls(on, PANE)
+  bandUsage(on, { usd: 0.099 })
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await flush()
+  const sent = calls.length
+
+  await $.session.end({ reason: 'other', sessionId: 's1', resume: { id: 's1' } })
+
+  expect(calls.slice(sent)).toEqual([
+    ['herdr', 'pane', 'report-metadata', PANE, '--source', 'cache-gauge', '--clear-token', 'cache', '--clear-token', 'ctx'],
+  ])
+})
+
+test('outside herdr the end of the session calls nothing', async ($, on) => {
+  const calls = herdrCalls(on, '')
+  bandUsage(on, { usd: 0.099 })
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.session.end({ reason: 'other', sessionId: 's1', resume: { id: 's1' } })
+
+  expect(calls).toEqual([])
 })

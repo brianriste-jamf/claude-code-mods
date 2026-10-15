@@ -201,6 +201,7 @@ export const register: Register = (on, options) => {
 
       return result
     }
+    herdr.setWorking(false)
     if (!e.usage) {
       return result
     }
@@ -246,6 +247,7 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined || result.usage === null) {
       return result
     }
+    herdr.setWorking(true)
     const held = await read($, snapshot)
     if (held !== null) {
       const usage = await $.session.usage({ breakdown: 'summary' })
@@ -269,6 +271,13 @@ export const register: Register = (on, options) => {
     }
 
     return result
+  })
+
+  // Tokens outlive the session in herdr's sidebar until removed.
+  on('session.end', async ($, e, next) => {
+    await herdr.clear()
+
+    return next(e)
   })
 
   on('session.compact', async ($, e, next) => {
