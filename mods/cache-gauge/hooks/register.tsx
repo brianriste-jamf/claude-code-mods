@@ -1,11 +1,12 @@
 import { atom, read, update } from 'claude-code'
-import type { On, Register } from 'claude-code'
+import type { EngineInterface, On, Register } from 'claude-code'
 
 import type { Snapshot } from '../types'
 import {
   bar,
   calibrate,
   countdown,
+  gaugeState,
   isSameModel,
   level,
   nextCost,
@@ -16,11 +17,21 @@ import {
   weightedUnits,
 } from './pricing'
 import type { Ttl } from './pricing'
+import { createHerdr } from './herdr'
 
 const PLUGIN = 'cache-gauge'
 const snapshot = atom({ plugin: 'cache-gauge', key: 'snapshot' } as const, null)
 const isHidden = atom({ plugin: 'cache-gauge', key: 'isHidden' } as const, false)
 const now = atom({ plugin: 'cache-gauge', key: 'now' } as const, 0)
+
+type Herdr = ReturnType<typeof createHerdr>
+
+// `t` is the time the caller already holds; without it the clock is read.
+async function sync($: EngineInterface, herdr: Herdr, t?: number) {
+  if (herdr.isOn) {
+    herdr.report(await read($, snapshot), t ?? (await $.clock.now()))
+  }
+}
 
 const onAbovePrompt = (on: On, ttl: Ttl) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -31,9 +42,7 @@ const onAbovePrompt = (on: On, ttl: Ttl) => {
 
     const { Box, Text } = $.ui.resolve(e)
 
-    // Fill toward where compaction runs (/autocompact moves it), else the model's window.
-    const limit = snap.compactAt ?? snap.window
-    const ctx = limit > 0 ? snap.ctxTokens / limit : 0
+    const { limit, ctx, leftMs, isWarm } = gaugeState(snap, ttl, await read($, now))
     const ctxPart = ` · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} `
 
     let state
@@ -42,10 +51,7 @@ const onAbovePrompt = (on: On, ttl: Ttl) => {
       state = <Text dimColor>◌ waiting for a reply</Text>
       consequence = ''
     } else {
-      const t = Math.max(await read($, now), snap.respondedAt)
-      const leftMs = snap.respondedAt + ttlMs(ttl) - t
       const current = snap.currentModel ?? snap.model
-      const isWarm = !snap.isCompacted && isSameModel(current, snap.model) && leftMs > 0
       const cost = nextCost(snap.ctxTokens, snap.baseUsd, current, ttl)
       const price = (n: number) => `${snap.isCalibrated ? '' : '~'}${usd(n)}`
       const cold = price(cost.cold)
@@ -92,13 +98,9 @@ const onPromptHint = (on: On, ttl: Ttl) => {
       return next(e)
     }
 
-    const limit = snap.compactAt ?? snap.window
-    const ctx = limit > 0 ? snap.ctxTokens / limit : 0
+    const { limit, ctx, leftMs, isWarm } = gaugeState(snap, ttl, await read($, now))
     let state = '◌ waiting'
     if (snap.respondedAt !== null) {
-      const t = Math.max(await read($, now), snap.respondedAt)
-      const leftMs = snap.respondedAt + ttlMs(ttl) - t
-      const isWarm = !snap.isCompacted && isSameModel(snap.currentModel ?? snap.model, snap.model) && leftMs > 0
       // Mid-turn every request restarts the lifetime: count down only once idle.
       state = isWarm ? (e.props.isWorking ? '● warm' : `● warm ${countdown(leftMs)}`) : '○ cold'
     }
@@ -119,6 +121,7 @@ export const register: Register = (on, options) => {
   let sawSubagent = false
   let warmUntil = 0
   let drawnAt = 0
+  const herdr = createHerdr(ttl)
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: PLUGIN, description: 'Show or hide the cache gauge' })
@@ -146,16 +149,18 @@ export const register: Register = (on, options) => {
     if (held !== null && held.respondedAt !== null && !held.isCompacted) {
       warmUntil = held.respondedAt + ttlMs(ttl)
     }
+    await herdr.detect(argv => $.process.run(argv))
+    await sync($, herdr)
     // Ticks until the band has drawn the cache cold. Not a time window: a machine
     // that sleeps through the expiry wakes to a first tick long past it.
     $.clock.every(1000, () => {
       if (drawnAt > warmUntil) {
         return
       }
-      void $.clock.now().then(t => {
+      void $.clock.now().then(async t => {
         drawnAt = t
-
-        return update($, now, () => t)
+        await update($, now, () => t)
+        await sync($, herdr, t)
       })
     })
 
@@ -229,6 +234,7 @@ export const register: Register = (on, options) => {
     await update($, snapshot, () => fresh)
     drawnAt = respondedAt
     await update($, now, () => respondedAt)
+    await sync($, herdr, respondedAt)
 
     return result
   })
@@ -259,6 +265,7 @@ export const register: Register = (on, options) => {
       }))
       drawnAt = respondedAt
       await update($, now, () => respondedAt)
+      await sync($, herdr, respondedAt)
     }
 
     return result
@@ -281,6 +288,7 @@ export const register: Register = (on, options) => {
         ctxTokens: result.tokensAfter ?? usage.context.tokens ?? held.ctxTokens,
         isCompacted: true,
       }))
+      await sync($, herdr)
     }
 
     return result
@@ -303,6 +311,7 @@ export const register: Register = (on, options) => {
         baseUsd: base ?? ratesFor(current).input,
         isCalibrated: base !== null,
       }))
+      await sync($, herdr)
     }
 
     return result

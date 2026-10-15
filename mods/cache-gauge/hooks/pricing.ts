@@ -1,3 +1,5 @@
+import type { Snapshot } from '../types'
+
 // Rates per model family, from the claude-api skill's pricing (cached 2026-10-06).
 // `input` is the list price per uncached input token; the calibration replaces it
 // with what this session actually pays (Bedrock, enterprise pricing).
@@ -94,4 +96,19 @@ export const countdown = (ms: number): string => {
   const s = Math.max(0, Math.ceil(ms / 1000))
 
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** What the gauge shows at time `t`: the cache's lifetime left, whether it is warm, and the context's fill. */
+export const gaugeState = (snap: Snapshot, ttl: Ttl, t: number) => {
+  // Fill toward where compaction runs (/autocompact moves it), else the model's window.
+  const limit = snap.compactAt ?? snap.window
+  const ctx = limit > 0 ? snap.ctxTokens / limit : 0
+  const leftMs = snap.respondedAt === null ? 0 : snap.respondedAt + ttlMs(ttl) - Math.max(t, snap.respondedAt)
+  const isWarm =
+    snap.respondedAt !== null &&
+    !snap.isCompacted &&
+    isSameModel(snap.currentModel ?? snap.model, snap.model) &&
+    leftMs > 0
+
+  return { limit, ctx, leftMs, isWarm }
 }

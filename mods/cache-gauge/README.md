@@ -47,6 +47,28 @@ With `position` set to `hint`, the gauge is drawn at the end of the hint line un
 - Cut where the row ends on a narrow terminal.
 - `ctx` and the cache state only; the `next msg` price is shown in `above` mode.
 
+## herdr
+
+Inside a [herdr](https://herdr.dev) pane (`HERDR_PANE_ID` set), the gauge also reports two pane metadata tokens under the source `cache-gauge`, whatever `position` is and whether or not the line is hidden. Outside herdr it does nothing, and a missing or failing `herdr` never affects the gauge.
+
+| Token | Values |
+|---|---|
+| `cache` | `warm`, `cold`, or `waiting` (no reply yet, as in `◌ waiting for a reply`) |
+| `ctx` | The context fill as a whole percent, a bare number such as `68`, so numeric rules (`gt`) apply |
+
+`cache=warm` carries `--ttl-ms` set to the lifetime left, as a backstop: herdr deletes an expired token, and the gauge sends `cache=cold` itself when the lifetime runs out. `ctx` is sent separately, with no TTL. Tokens go out at start, after each reply, a compaction or a `/model` switch, and when the cache goes cold; an unchanged value is not sent again.
+
+Show them in herdr's Agent sidebar:
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "machine", "workspace", "tab"],
+  ["agent", { token = "$cache", rules = [{ equals = "cold", fg = "#f55" }, { equals = "warm", fg = "#5c5" }] },
+            { token = "$ctx", rules = [{ gt = 80, fg = "#f55" }, { gt = 50, fg = "#fc0" }] }],
+]
+```
+
 ## How the cost is estimated
 
 The estimate starts from list prices per model family (Opus, Sonnet, Haiku, Fable), then calibrates against what the session really pays: after each reply it divides the session's cost increase by that reply's tokens, weighted by kind (cache read, cache write, uncached input, output), and keeps a moving average. Until the first usable sample the price carries a `~`. This makes the figure right on Bedrock or enterprise pricing, where list prices do not apply. Replies that ran a subagent are skipped as samples, since the subagent's cost lands in the session total but not in the reply's own tokens.
