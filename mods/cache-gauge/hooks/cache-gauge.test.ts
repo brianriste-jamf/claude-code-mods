@@ -695,6 +695,17 @@ test('in herdr the start reports waiting, a reply reports warm with its lifetime
   expect(calls.slice(2)).toEqual([agent('opus 5.5'), [...REPORT, 'cache=warm 5m', '--ttl-ms', '300000']])
 })
 
+test('in herdr the start names the model before any reply, from the session', async ($, on) => {
+  const calls = herdrCalls(on, PANE)
+  bandUsage(on, { usd: 0.099 })
+  on('session.model', () => ({ value: OPUS }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await flush()
+
+  expect(calls[0]).toEqual(agent('opus 5.5'))
+})
+
 test('the warm token carries the time left, and the TTL crossing reports cold without one', async ($, on) => {
   const calls = herdrCalls(on, PANE)
   const clock = bandUsage(on, { usd: 0.099 })

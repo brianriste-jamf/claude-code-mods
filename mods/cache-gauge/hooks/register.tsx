@@ -150,6 +150,13 @@ export const register: Register = (on, options) => {
       warmUntil = held.respondedAt + ttlMs(ttl)
     }
     await herdr.detect(argv => $.process.run(argv))
+    // A fresh or reloaded session may hold no model in its usage yet; the session knows it.
+    if (herdr.isOn) {
+      const model = await $.session.model().catch(() => null)
+      if (typeof model === 'string') {
+        herdr.showModel(model)
+      }
+    }
     await sync($, herdr)
     // Ticks until the band has drawn the cache cold. Not a time window: a machine
     // that sleeps through the expiry wakes to a first tick long past it.

@@ -43,7 +43,17 @@ export const createHerdr = (ttl: Ttl) => {
   const send = (token: string, ttlMs?: number) =>
     call('--token', token, ...(ttlMs === undefined ? [] : ['--ttl-ms', String(ttlMs)]))
 
+  // The sidebar's agent slot reads the model; --agent keeps it to a pane that is still running claude.
+  const showModel = (model: string) => {
+    if (paneId !== '' && model !== '' && model !== sentModel) {
+      sentModel = model
+      call('--display-agent', shortModel(model), '--agent', 'claude')
+    }
+  }
+
   return {
+    showModel,
+
     get isOn() {
       return paneId !== ''
     },
@@ -81,12 +91,7 @@ export const createHerdr = (ttl: Ttl) => {
         return
       }
       const { ctx, leftMs, isWarm } = gaugeState(snap, ttl, t)
-      // The sidebar's agent slot reads the model; --agent keeps it to a pane that is still running claude.
-      const model = snap.currentModel ?? snap.model
-      if (model !== '' && model !== sentModel) {
-        sentModel = model
-        call('--display-agent', shortModel(model), '--agent', 'claude')
-      }
+      showModel(snap.currentModel ?? snap.model)
       // The countdown steps every 30 s, rounded up, in minutes: `warm 5m`, `warm 4.5m` ... `warm 0.5m`.
       const warm = isWorking ? 'warm' : `warm ${(Math.ceil(leftMs / STEP_MS) * STEP_MS) / 60_000}m`
       const cache = snap.respondedAt === null ? 'waiting' : isWarm ? warm : 'cold'
