@@ -58,6 +58,8 @@ Inside a [herdr](https://herdr.dev) pane (`HERDR_PANE_ID` set), the gauge also r
 
 A `warm` value carries `--ttl-ms` set to the lifetime left, as a backstop: herdr deletes an expired token, and the gauge sends `cache=cold` itself when the lifetime runs out. `ctx` is sent separately, with a 24 h backstop so a crashed session's value goes eventually. Tokens go out at start, when the countdown text changes (about once a minute), after each reply, a compaction or a `/model` switch, and when the cache goes cold; an unchanged value is not sent again. Both tokens are cleared when the session ends.
 
+The gauge also sets the pane's display agent to the current model (`opus 5.5`, `sonnet 4.6`) while `claude` is the pane's agent, so the sidebar's `agent` slot names the model; it is cleared with the tokens.
+
 Show them in herdr's Agent sidebar (the first matching rule wins, so `warm <1m` precedes the `warm` prefix):
 
 ```toml

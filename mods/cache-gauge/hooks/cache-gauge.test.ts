@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { shortModel } from './herdr'
 import { bar, calibrate, level, nextCost, ratesFor, weightedUnits } from './pricing'
 
 const OPUS = 'claude-opus-5-5'
@@ -646,7 +647,9 @@ test('position hint leaves AbovePrompt to the engine: nothing of the band is dra
 // herdr: the process.run beneath the mod answers `printf $HERDR_PANE_ID` with `pane` and records the report calls.
 const PANE = 'w4:p1'
 const DAY = '86400000'
-const REPORT = ['herdr', 'pane', 'report-metadata', PANE, '--source', 'cache-gauge', '--token']
+const SRC = ['herdr', 'pane', 'report-metadata', PANE, '--source', 'cache-gauge']
+const REPORT = [...SRC, '--token']
+const agent = (name: string) => [...SRC, '--display-agent', name, '--agent', 'claude']
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } }) as never
 const herdrCalls = (on: On, pane: string, isBroken = false) => {
   const calls: string[][] = []
@@ -689,7 +692,7 @@ test('in herdr the start reports waiting, a reply reports warm with its lifetime
 
   await reply($)
   await flush()
-  expect(calls.slice(2)).toEqual([[...REPORT, 'cache=warm 5m', '--ttl-ms', '300000']])
+  expect(calls.slice(2)).toEqual([agent('opus 5.5'), [...REPORT, 'cache=warm 5m', '--ttl-ms', '300000']])
 })
 
 test('the warm token carries the time left, and the TTL crossing reports cold without one', async ($, on) => {
@@ -715,7 +718,12 @@ test('the warm token carries the time left, and the TTL crossing reports cold wi
   await switchTo('claude-sonnet-5-5')
   await switchTo(OPUS)
   await flush()
-  expect(calls.slice(-2)).toEqual([[...REPORT, 'cache=cold'], [...REPORT, 'cache=warm 4m', '--ttl-ms', '200000']])
+  expect(calls.slice(-4)).toEqual([
+    agent('sonnet 5.5'),
+    [...REPORT, 'cache=cold'],
+    agent('opus 5.5'),
+    [...REPORT, 'cache=warm 4m', '--ttl-ms', '200000'],
+  ])
 
   await clock.advance(201_000)
   await flush()
@@ -826,7 +834,7 @@ test('the end of the session clears both tokens', async ($, on) => {
   await $.session.end({ reason: 'other', sessionId: 's1', resume: { id: 's1' } })
 
   expect(calls.slice(sent)).toEqual([
-    ['herdr', 'pane', 'report-metadata', PANE, '--source', 'cache-gauge', '--clear-token', 'cache', '--clear-token', 'ctx'],
+    [...SRC, '--clear-token', 'cache', '--clear-token', 'ctx', '--clear-display-agent'],
   ])
 })
 
@@ -838,4 +846,14 @@ test('outside herdr the end of the session calls nothing', async ($, on) => {
   await $.session.end({ reason: 'other', sessionId: 's1', resume: { id: 's1' } })
 
   expect(calls).toEqual([])
+})
+
+test('the display agent is the model, short', () => {
+  expect(shortModel('us.anthropic.claude-opus-5-5')).toBe('opus 5.5')
+  expect(shortModel('global.anthropic.claude-sonnet-4-6-v1:0')).toBe('sonnet 4.6')
+  expect(shortModel('anthropic.claude-haiku-5')).toBe('haiku 5')
+  expect(shortModel('claude-sonnet-4-6[1m]')).toBe('sonnet 4.6')
+  expect(shortModel('claude-haiku-5-5-20260101')).toBe('haiku 5.5')
+  expect(shortModel('claude-3-5-sonnet-20241022')).toBe('claude-3-5-sonnet-20241022')
+  expect(shortModel('my-model')).toBe('my-model')
 })

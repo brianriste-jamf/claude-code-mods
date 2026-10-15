@@ -6,6 +6,19 @@ import type { Ttl } from './pricing'
 const CTX_TTL_MS = 86_400_000
 const MINUTE = 60_000
 
+/** `us.anthropic.claude-opus-5-5` -> `opus 5.5`; an id of another shape is returned as it is. */
+export const shortModel = (id: string): string => {
+  const bare = id
+    .replace(/\[.*\]$/, '')
+    .replace(/-v\d+(:\d+)?$/, '')
+    .replace(/-\d{8}$/, '')
+    .replace(/^([a-z-]+\.)*anthropic\./, '')
+    .replace(/^claude-/, '')
+  const m = /^([a-z]+)-(\d+(?:-\d+)*)$/.exec(bare)
+
+  return m ? `${m[1]} ${m[2]?.replaceAll('-', '.')}` : id
+}
+
 type Run = (argv: string[]) => Promise<{ stdout: string }>
 
 /**
@@ -18,6 +31,7 @@ export const createHerdr = (ttl: Ttl) => {
   let sentCache: string | null = null
   let sentCtx: string | null = null
   let isWorking = false
+  let sentModel: string | null = null
   // One call at a time, so a quick warm then cold lands in order.
   let queue: Promise<unknown> = Promise.resolve()
 
@@ -56,7 +70,8 @@ export const createHerdr = (ttl: Ttl) => {
       }
       sentCache = null
       sentCtx = null
-      call('--clear-token', 'cache', '--clear-token', 'ctx')
+      sentModel = null
+      call('--clear-token', 'cache', '--clear-token', 'ctx', '--clear-display-agent')
       await queue
     },
 
@@ -66,6 +81,12 @@ export const createHerdr = (ttl: Ttl) => {
         return
       }
       const { ctx, leftMs, isWarm } = gaugeState(snap, ttl, t)
+      // The sidebar's agent slot reads the model; --agent keeps it to a pane that is still running claude.
+      const model = snap.currentModel ?? snap.model
+      if (model !== '' && model !== sentModel) {
+        sentModel = model
+        call('--display-agent', shortModel(model), '--agent', 'claude')
+      }
       // The countdown steps once a minute: `warm 5m` down to `warm 2m`, then `warm <1m`.
       const warm = isWorking ? 'warm' : leftMs <= MINUTE ? 'warm <1m' : `warm ${Math.ceil(leftMs / MINUTE)}m`
       const cache = snap.respondedAt === null ? 'waiting' : isWarm ? warm : 'cold'
