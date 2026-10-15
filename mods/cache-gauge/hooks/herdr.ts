@@ -1,10 +1,10 @@
 import type { Snapshot } from '../types'
-import { gaugeState } from './pricing'
+import { countdown, gaugeState } from './pricing'
 import type { Ttl } from './pricing'
 
 // herdr's longest token lifetime: a crashed session's ctx is gone by then.
 const CTX_TTL_MS = 86_400_000
-const MINUTE = 60_000
+const STEP_MS = 30_000
 
 /** `us.anthropic.claude-opus-5-5` -> `opus 5.5`; an id of another shape is returned as it is. */
 export const shortModel = (id: string): string => {
@@ -87,8 +87,8 @@ export const createHerdr = (ttl: Ttl) => {
         sentModel = model
         call('--display-agent', shortModel(model), '--agent', 'claude')
       }
-      // The countdown steps once a minute: `warm 5m` down to `warm 2m`, then `warm <1m`.
-      const warm = isWorking ? 'warm' : leftMs <= MINUTE ? 'warm <1m' : `warm ${Math.ceil(leftMs / MINUTE)}m`
+      // The countdown steps every 30 s, rounded up: `warm 5:00`, `warm 4:30` ... `warm 0:30`.
+      const warm = isWorking ? 'warm' : `warm ${countdown(Math.ceil(leftMs / STEP_MS) * STEP_MS)}`
       const cache = snap.respondedAt === null ? 'waiting' : isWarm ? warm : 'cold'
       // A reply restarts the lifetime, so it sends again even when the text is the same: the TTL needs the refresh.
       const cacheKey = isWarm ? `${cache}@${snap.respondedAt}` : cache

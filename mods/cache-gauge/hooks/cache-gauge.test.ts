@@ -692,7 +692,7 @@ test('in herdr the start reports waiting, a reply reports warm with its lifetime
 
   await reply($)
   await flush()
-  expect(calls.slice(2)).toEqual([agent('opus 5.5'), [...REPORT, 'cache=warm 5m', '--ttl-ms', '300000']])
+  expect(calls.slice(2)).toEqual([agent('opus 5.5'), [...REPORT, 'cache=warm 5:00', '--ttl-ms', '300000']])
 })
 
 test('the warm token carries the time left, and the TTL crossing reports cold without one', async ($, on) => {
@@ -722,7 +722,7 @@ test('the warm token carries the time left, and the TTL crossing reports cold wi
     agent('sonnet 5.5'),
     [...REPORT, 'cache=cold'],
     agent('opus 5.5'),
-    [...REPORT, 'cache=warm 4m', '--ttl-ms', '200000'],
+    [...REPORT, 'cache=warm 3:30', '--ttl-ms', '200000'],
   ])
 
   await clock.advance(201_000)
@@ -739,13 +739,13 @@ test('values that did not change are not sent again; a new reply refreshes the w
   await flush()
   const sent = calls.length
 
-  await clock.advance(30_000)
+  await clock.advance(20_000)
   await flush()
   expect(calls.length).toBe(sent)
 
   await reply($)
   await flush()
-  expect(calls.slice(sent)).toEqual([[...REPORT, 'cache=warm 5m', '--ttl-ms', '300000']])
+  expect(calls.slice(sent)).toEqual([[...REPORT, 'cache=warm 5:00', '--ttl-ms', '300000']])
 })
 
 test('a compaction reports cold and the new context', async ($, on) => {
@@ -779,7 +779,7 @@ test('a herdr that fails leaves the gauge drawing', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: '● warm 5:00' })).toBeDefined()
 })
 
-test('the countdown steps once a minute, ends at <1m, then cold', async ($, on) => {
+test('the countdown steps every 30 s, ends at 0:30, then cold', async ($, on) => {
   const calls = herdrCalls(on, PANE)
   const clock = bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
@@ -788,14 +788,11 @@ test('the countdown steps once a minute, ends at <1m, then cold', async ($, on) 
   await clock.advance(301_000)
   await flush()
 
-  // Each text once, however many ticks pass in its minute; a warm one carries the time left.
+  // Each text once, however many ticks pass in its step; a warm one carries the time left.
+  const steps = [300, 270, 240, 210, 180, 150, 120, 90, 60, 30]
   expect(calls.filter(c => c.some(a => a.startsWith('cache='))).map(c => c.slice(7))).toEqual([
     ['cache=waiting'],
-    ['cache=warm 5m', '--ttl-ms', '300000'],
-    ['cache=warm 4m', '--ttl-ms', '240000'],
-    ['cache=warm 3m', '--ttl-ms', '180000'],
-    ['cache=warm 2m', '--ttl-ms', '120000'],
-    ['cache=warm <1m', '--ttl-ms', '60000'],
+    ...steps.map(s => [`cache=warm ${Math.floor(s / 60)}:${s % 60 === 0 ? '00' : '30'}`, '--ttl-ms', String(s * 1000)]),
     ['cache=cold'],
   ])
 })
@@ -820,7 +817,7 @@ test('mid-turn the cache token is plain warm, and the countdown returns with the
 
   await reply($)
   await flush()
-  expect(calls.at(-1)).toEqual([...REPORT, 'cache=warm 5m', '--ttl-ms', '300000'])
+  expect(calls.at(-1)).toEqual([...REPORT, 'cache=warm 5:00', '--ttl-ms', '300000'])
 })
 
 test('the end of the session clears both tokens', async ($, on) => {
