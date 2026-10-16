@@ -37,7 +37,7 @@ The line refreshes after every model request, so a long turn of tool calls keeps
 
 ### Switching position
 
-Set `position` in `settings.json`; the mod picks it up on the next plugin reload or session start:
+Run `/plugin configure cache-gauge@brian-mods` in a session, or `claude plugin configure cache-gauge@brian-mods` from a shell, and set `position`. Or set it in `settings.json`; the mod picks it up on the next plugin reload or session start:
 
 ```json
 "pluginConfigs": {
