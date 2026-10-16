@@ -35,6 +35,18 @@ The line refreshes after every model request, so a long turn of tool calls keeps
 | `cacheTtl` | `5m` | How long the cache stays warm after a reply: `5m` or `1h`. Match it to the TTL your Claude Code session actually requests |
 | `position` | `above` | `above`: the full gauge in a band above the prompt. `hint`: the compact form below, at the end of the hint line under the prompt |
 
+### Switching position
+
+Set `position` in `settings.json`; the mod picks it up on the next plugin reload or session start:
+
+```json
+"pluginConfigs": {
+  "cache-gauge@petrvnk-mods": { "options": { "position": "hint" } }
+}
+```
+
+Set it back to `"above"` for the band above the prompt.
+
 ## Position `hint`
 
 With `position` set to `hint`, the gauge is drawn at the end of the hint line under the prompt, with no price and no bar:
