@@ -33,7 +33,7 @@ The line refreshes after every model request, so a long turn of tool calls keeps
 | Option | Default | Meaning |
 |---|---|---|
 | `cacheTtl` | `5m` | How long the cache stays warm after a reply: `5m` or `1h`. Match it to the TTL your Claude Code session actually requests |
-| `position` | `above` | `above`: the full gauge in a band above the prompt. `hint`: the compact form below, at the end of the hint line under the prompt |
+| `position` | `hint` | `above`: the full gauge in a band above the prompt. `hint`: the compact form below, at the end of the hint line under the prompt. This fork defaults to `hint`; upstream defaults to `above` |
 
 ### Switching position
 
@@ -41,11 +41,11 @@ Run `/plugin configure cache-gauge@brian-mods` in a session, or `claude plugin c
 
 ```json
 "pluginConfigs": {
-  "cache-gauge@brian-mods": { "options": { "position": "hint" } }
+  "cache-gauge@brian-mods": { "options": { "position": "above" } }
 }
 ```
 
-Set it back to `"above"` for the band above the prompt.
+`"above"` draws the full band above the prompt; `"hint"` (the default) draws the compact form under it.
 
 ## Position `hint`
 

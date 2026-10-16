@@ -15,6 +15,7 @@ const TURN_USAGE = {
   model: OPUS,
 }
 const HINT_OPTIONS = { position: 'hint' } as const
+const ABOVE_OPTIONS = { position: 'above' } as const
 const HINT = {
   plugin: 'cache-gauge',
   component: 'PromptHint',
@@ -363,7 +364,7 @@ const bandUsage = (on: On, cost: { usd: number }, below: object = { type: 'Box',
   return clock
 }
 
-test('the band shows the gauges after a turn and goes cold past the TTL', async ($, on) => {
+test('the band shows the gauges after a turn and goes cold past the TTL', { options: ABOVE_OPTIONS }, async ($, on) => {
   const cost = { usd: 0 }
   const clock = bandUsage(on, cost)
   on('turn.complete', () => ({ text: '' }))
@@ -394,7 +395,7 @@ test('the band shows the gauges after a turn and goes cold past the TTL', async 
   expect(await ui.find({ type: 'Text', text: ' · next msg $0.30 · ctx 60k/200k ' })).toBeDefined()
 })
 
-test('a subagent turn keeps the band unchanged and skips that calibration sample', async ($, on) => {
+test('a subagent turn keeps the band unchanged and skips that calibration sample', { options: ABOVE_OPTIONS }, async ($, on) => {
   const cost = { usd: 0 }
   bandUsage(on, cost)
   on('turn.complete', () => ({ text: '' }))
@@ -411,7 +412,7 @@ test('a subagent turn keeps the band unchanged and skips that calibration sample
   expect(await ui.find({ type: 'Text', text: /next msg ~\$[\d.]+ \(cold ~\$/ })).toBeDefined()
 })
 
-test('the command toggles the band', async ($, on) => {
+test('the command toggles the band', { options: ABOVE_OPTIONS }, async ($, on) => {
   bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
@@ -433,7 +434,7 @@ test('the command toggles the band', async ($, on) => {
   expect(await shown.find({ type: 'Text', text: /warm/ })).toBeDefined()
 })
 
-test('the band still goes cold when the machine slept through the TTL', async ($, on) => {
+test('the band still goes cold when the machine slept through the TTL', { options: ABOVE_OPTIONS }, async ($, on) => {
   // A hand-driven clock: a sleep moves the wall clock with no tick in between.
   let t = 0
   let periods: Array<() => void> = []
@@ -472,7 +473,7 @@ test('the band still goes cold when the machine slept through the TTL', async ($
   expect(await ui.find({ type: 'Text', text: '○ cold' })).toBeDefined()
 })
 
-test('ctx is measured against the compaction threshold', async ($, on) => {
+test('ctx is measured against the compaction threshold', { options: ABOVE_OPTIONS }, async ($, on) => {
   mock.clock(on)
   on('session.usage', () => ({
     value: {
@@ -508,7 +509,7 @@ test('ctx is measured against the compaction threshold', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: ' 65%' })).toBeDefined()
 })
 
-test('the band draws the context at start, before any reply', async ($, on) => {
+test('the band draws the context at start, before any reply', { options: ABOVE_OPTIONS }, async ($, on) => {
   bandUsage(on, { usd: 0 })
 
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
@@ -518,7 +519,7 @@ test('the band draws the context at start, before any reply', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: ' · ctx 60k/200k ' })).toBeDefined()
 })
 
-test('show and hide set the band, a bare command toggles it', async ($, on) => {
+test('show and hide set the band, a bare command toggles it', { options: ABOVE_OPTIONS }, async ($, on) => {
   bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
@@ -541,7 +542,7 @@ test('show and hide set the band, a bare command toggles it', async ($, on) => {
   expect(await run('')).toBe(true)
 })
 
-test('the band keeps the line another mod draws beneath it', async ($, on) => {
+test('the band keeps the line another mod draws beneath it', { options: ABOVE_OPTIONS }, async ($, on) => {
   bandUsage(on, { usd: 0.099 }, { type: 'Text', props: {}, children: ['↻ keepalive 3/24'] })
   on('turn.complete', () => ({ text: '' }))
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
@@ -551,7 +552,7 @@ test('the band keeps the line another mod draws beneath it', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: '↻ keepalive 3/24' })).toBeDefined()
 })
 
-test('a compaction redraws the context and the cache as cold', async ($, on) => {
+test('a compaction redraws the context and the cache as cold', { options: ABOVE_OPTIONS }, async ($, on) => {
   bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   const summary = [{ role: 'user', text: 'summary', toolUses: [] }] as const
@@ -566,7 +567,7 @@ test('a compaction redraws the context and the cache as cold', async ($, on) => 
   expect(await ui.find({ type: 'Text', text: / · ctx 12k\/200k $/ })).toBeDefined()
 })
 
-test('a /model switch prices the other model and leaves its cache cold until switched back', async ($, on) => {
+test('a /model switch prices the other model and leaves its cache cold until switched back', { options: ABOVE_OPTIONS }, async ($, on) => {
   const cost = { usd: 0 }
   bandUsage(on, cost)
   on('turn.complete', () => ({ text: '' }))
@@ -600,7 +601,7 @@ test('a /model switch prices the other model and leaves its cache cold until swi
   expect(await back.find({ type: 'Text', text: ' · next msg $0.01 (cold $0.30) · ctx 60k/200k ' })).toBeDefined()
 })
 
-test('each request of a long turn restarts the countdown', async ($, on) => {
+test('each request of a long turn restarts the countdown', { options: ABOVE_OPTIONS }, async ($, on) => {
   const clock = bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   const step = { turnId: 't2', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: TURN_USAGE } as const
@@ -626,12 +627,22 @@ test('each request of a long turn restarts the countdown', async ($, on) => {
   expect(await working.find({ type: 'Text', text: '● warm' })).toBeDefined()
 })
 
-test('default options leave PromptHint to the engine: no tail is set', async ($, on) => {
+test('position above leaves PromptHint to the engine: no tail is set', { options: ABOVE_OPTIONS }, async ($, on) => {
   answerUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
 
   expect(await hintTail(v => $.ui.mount(v))).toBeUndefined()
+})
+
+test('default options draw the hint and leave the band to the engine', async ($, on) => {
+  answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  expect(await hintTail(v => $.ui.mount(v))).toContain('ctx')
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /ctx/ })).toBeUndefined()
 })
 
 test('position hint leaves AbovePrompt to the engine: nothing of the band is drawn', { options: HINT_OPTIONS }, async ($, on) => {
@@ -776,7 +787,7 @@ test('a compaction reports cold and the new context', async ($, on) => {
   expect(calls.slice(sent)).toEqual([[...REPORT, 'cache=cold'], [...REPORT, 'ctx=6', '--ttl-ms', DAY]])
 })
 
-test('a herdr that fails leaves the gauge drawing', async ($, on) => {
+test('a herdr that fails leaves the gauge drawing', { options: ABOVE_OPTIONS }, async ($, on) => {
   const calls = herdrCalls(on, PANE, true)
   bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))

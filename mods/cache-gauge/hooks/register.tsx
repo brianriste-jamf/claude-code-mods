@@ -113,7 +113,7 @@ const onPromptHint = (on: On, ttl: Ttl) => {
 
 export const register: Register = (on, options) => {
   const ttl: Ttl = options.cacheTtl === '1h' ? '1h' : '5m'
-  const position = options.position === 'hint' ? 'hint' : 'above'
+  const position = options.position === 'above' ? 'above' : 'hint'
   let lastUsd = 0
   // Calibrated per model: a /model switch must not price one model at another's rate.
   const bases = new Map<string, number>()

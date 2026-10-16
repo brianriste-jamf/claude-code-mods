@@ -22,7 +22,7 @@
         "above",
         "hint"
       ],
-      "default": "above"
+      "default": "hint"
     }
   }
 }
