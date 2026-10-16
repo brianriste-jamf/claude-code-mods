@@ -21,33 +21,33 @@ The first line is `cache-gauge`, the second `cache-keepalive` while it is armed.
 In a Claude Code session:
 
 ```
-/plugin install cache-gauge --marketplace petrvnk/claude-code-mods
-/plugin install cache-keepalive --marketplace petrvnk/claude-code-mods
+/plugin install cache-gauge --marketplace brianriste-jamf/claude-code-mods
+/plugin install cache-keepalive --marketplace brianriste-jamf/claude-code-mods
 ```
 
-Answer `y` to add the marketplace, then pick the **user** scope so the mods load in every session. The repository is private: the machine needs git access to it under an account that can read it.
+Answer `y` to add the marketplace, then pick the **user** scope so the mods load in every session. This is Brian's fork of `petrvnk/claude-code-mods`, public, with the herdr sidebar tokens added to `cache-gauge`. Its marketplace is named `brian-mods`, so it does not collide with upstream's `petrvnk-mods`.
 
 From a shell, the same thing:
 
 ```bash
-claude plugin marketplace add petrvnk/claude-code-mods
-claude plugin install cache-gauge@petrvnk-mods --scope user
-claude plugin install cache-keepalive@petrvnk-mods --scope user
+claude plugin marketplace add brianriste-jamf/claude-code-mods
+claude plugin install cache-gauge@brian-mods --scope user
+claude plugin install cache-keepalive@brian-mods --scope user
 ```
 
 ### Update
 
 ```bash
-claude plugin marketplace update petrvnk-mods
-claude plugin update cache-gauge@petrvnk-mods
-claude plugin update cache-keepalive@petrvnk-mods
+claude plugin marketplace update brian-mods
+claude plugin update cache-gauge@brian-mods
+claude plugin update cache-keepalive@brian-mods
 ```
 
 Then `/reload-plugins` in a running session, or start a new one.
 
 ### Configure
 
-Both mods have options (see each mod's README). Set them with `/plugin configure <mod>@petrvnk-mods`, or at install time with `--config KEY=VALUE`.
+Both mods have options (see each mod's README). Set them with `/plugin configure <mod>@brian-mods`, or at install time with `--config KEY=VALUE`.
 
 ## Using them together
 
@@ -73,7 +73,7 @@ An installed mod runs the copy made at install time, so a change reaches your se
 ## Repository layout
 
 ```
-.claude-plugin/marketplace.json   marketplace "petrvnk-mods"
+.claude-plugin/marketplace.json   marketplace "brian-mods"
 mods/
   cache-gauge/                    gauges above the prompt
   cache-keepalive/                idle keep-alive pings

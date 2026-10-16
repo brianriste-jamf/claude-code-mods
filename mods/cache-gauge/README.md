@@ -41,7 +41,7 @@ Set `position` in `settings.json`; the mod picks it up on the next plugin reload
 
 ```json
 "pluginConfigs": {
-  "cache-gauge@petrvnk-mods": { "options": { "position": "hint" } }
+  "cache-gauge@brian-mods": { "options": { "position": "hint" } }
 }
 ```
 
