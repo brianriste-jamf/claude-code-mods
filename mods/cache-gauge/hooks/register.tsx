@@ -90,7 +90,7 @@ const onAbovePrompt = (on: On, ttl: Ttl) => {
   })
 }
 
-const onPromptHint = (on: On, ttl: Ttl) => {
+const onPromptHint = (on: On, ttl: Ttl, isColored: boolean) => {
   // Dim tail on the hint line under the prompt: cache state and context fill only.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const snap = await read($, snapshot)
@@ -99,21 +99,48 @@ const onPromptHint = (on: On, ttl: Ttl) => {
     }
 
     const { limit, ctx, leftMs, isWarm } = gaugeState(snap, ttl, await read($, now))
+    const isEnding = isWarm && leftMs <= 60_000
     let state = '◌ waiting'
     if (snap.respondedAt !== null) {
       // Mid-turn every request restarts the lifetime: count down only once idle.
-      state = isWarm ? (e.props.isWorking ? '● warm' : `● warm ${countdown(leftMs)}`) : '○ cold'
+      if (isWarm) {
+        // Uncoloured, the last minute blinks the dot once a second (the clock ticks at 1 Hz).
+        const dot = !isColored && isEnding && Math.ceil(leftMs / 1000) % 2 === 0 ? '○' : '●'
+        state = e.props.isWorking ? '● warm' : `${dot} warm ${countdown(leftMs)}`
+      } else {
+        // Only a cold cache makes the next message expensive enough to flag.
+        const cost = nextCost(snap.ctxTokens, snap.baseUsd, snap.currentModel ?? snap.model, ttl)
+        state = `○ cold · next msg ${snap.isCalibrated ? '' : '~'}${usd(cost.cold)}`
+      }
     }
-    const mine = `${state} · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} ${Math.round(ctx * 100)}%`
-    const tail = e.props.tail ? `${e.props.tail} · ${mine}` : `  ${mine}`
+    const rest = ` · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} ${Math.round(ctx * 100)}%`
 
-    return next({ ...e, props: { ...e.props, tail } })
+    if (!isColored) {
+      const mine = `${state}${rest}`
+      const tail = e.props.tail ? `${e.props.tail} · ${mine}` : `  ${mine}`
+
+      return next({ ...e, props: { ...e.props, tail } })
+    }
+
+    // A tail is one dim string, so colour means drawing the line here instead of calling next.
+    const { Box, Text } = $.ui.resolve(e)
+    const color = snap.respondedAt === null ? undefined : !isWarm ? 'error' : isEnding && !e.props.isWorking ? 'warning' : undefined
+    const lead = `${e.props.hint ?? ''}${e.props.tail ? `${e.props.tail} · ` : '  '}`
+
+    return (
+      <Box>
+        <Text dimColor wrap="truncate-end">{lead}</Text>
+        {color ? <Text color={color}>{state}</Text> : <Text dimColor>{state}</Text>}
+        <Text dimColor wrap="truncate-end">{rest}</Text>
+      </Box>
+    )
   })
 }
 
 export const register: Register = (on, options) => {
   const ttl: Ttl = options.cacheTtl === '1h' ? '1h' : '5m'
   const position = options.position === 'above' ? 'above' : 'hint'
+  const isColored = options.hintColor === 'on'
   let lastUsd = 0
   // Calibrated per model: a /model switch must not price one model at another's rate.
   const bases = new Map<string, number>()
@@ -130,9 +157,11 @@ export const register: Register = (on, options) => {
     // Draw the context at once (a reload, a resumed session) rather than after the
     // next reply; the cache's state is unknown until a reply says when it was written.
     const held = await read($, snapshot)
-    if (held === null && usage.context.tokens !== undefined) {
+    // Seeded even with no token count yet (a fresh session), so the gauge is there before the first message.
+    if (held === null) {
       const breakdown = usage.context.breakdown
-      const model = breakdown?.model ?? ''
+      const session = await $.session.model().catch(() => null)
+      const model = breakdown?.model || (typeof session === 'string' ? session : '')
       await update($, snapshot, () => ({
         ctxTokens: usage.context.tokens ?? 0,
         window: usage.context.window,
@@ -336,6 +365,6 @@ export const register: Register = (on, options) => {
   if (position === 'above') {
     onAbovePrompt(on, ttl)
   } else {
-    onPromptHint(on, ttl)
+    onPromptHint(on, ttl, isColored)
   }
 }
