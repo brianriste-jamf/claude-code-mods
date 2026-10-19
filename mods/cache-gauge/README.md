@@ -34,6 +34,7 @@ The line refreshes after every model request, so a long turn of tool calls keeps
 |---|---|---|
 | `cacheTtl` | `5m` | How long the cache stays warm after a reply: `5m` or `1h`. Match it to the TTL your Claude Code session actually requests |
 | `position` | `hint` | `above`: the full gauge in a band above the prompt. `hint`: the compact form below, at the end of the hint line under the prompt. This fork defaults to `hint`; upstream defaults to `above` |
+| `hintColor` | `off` | `on`: with `position` `hint`, the dot and countdown turn yellow in the last minute and red when cold. The mod then draws the whole hint line itself, so a later mod's hint handler is skipped and engine changes to that line are not picked up |
 
 ### Switching position
 
@@ -49,15 +50,15 @@ Run `/plugin configure cache-gauge@brian-mods` in a session, or `claude plugin c
 
 ## Position `hint`
 
-With `position` set to `hint`, the gauge is drawn at the end of the hint line under the prompt, with no price and no bar:
+With `position` set to `hint`, the gauge is drawn at the end of the hint line under the prompt, with no bar:
 
 ```
 ● warm 4:40 · ctx 250k/367k 68%
 ```
 
-- No colour: the hint line is one string.
+- No colour unless `hintColor` is `on`; without it, the dot blinks in the last minute instead.
 - Cut where the row ends on a narrow terminal.
-- `ctx` and the cache state only; the `next msg` price is shown in `above` mode.
+- The `next msg` price shows only when the cache is cold.
 
 ## herdr
 

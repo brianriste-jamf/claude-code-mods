@@ -16,6 +16,7 @@ const TURN_USAGE = {
 }
 const HINT_OPTIONS = { position: 'hint' } as const
 const ABOVE_OPTIONS = { position: 'above' } as const
+const COLOR_OPTIONS = { position: 'hint', hintColor: 'on' } as const
 const HINT = {
   plugin: 'cache-gauge',
   component: 'PromptHint',
@@ -120,7 +121,53 @@ test('the hint shows the gauge after a turn and goes cold past the TTL', { optio
   }
 
   await clock.advance(301_000)
-  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · ctx 60k/200k 30%')
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · next msg $0.30 · ctx 60k/200k 30%')
+})
+
+test('the dot blinks in the last minute of the hint', { options: HINT_OPTIONS }, async ($, on) => {
+  const clock = answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+
+  await clock.advance(239_000)
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 1:01 · ctx 60k/200k 30%')
+  const dots = []
+  for (let i = 0; i < 2; i++) {
+    await clock.advance(1000)
+    dots.push((await hintTail(v => $.ui.mount(v)))?.trim()[0])
+  }
+  expect(dots.sort()).toEqual(['○', '●'])
+})
+
+test('hint colour draws the line itself: plain, yellow in the last minute, red when cold', { options: COLOR_OPTIONS }, async ($, on) => {
+  const clock = answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  const mount = async () => {
+    tail = undefined
+    const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
+    // The engine's handler never runs, so no tail reaches it.
+    expect(tail).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '? for shortcuts  ' })).toBeDefined()
+
+    return ui
+  }
+
+  let ui = await mount()
+  expect((await ui.find({ type: 'Text', text: '● warm 5:00' }))?.props).toEqual({ dimColor: true })
+  await ui.unmount()
+
+  await clock.advance(250_000)
+  ui = await mount()
+  expect((await ui.find({ type: 'Text', text: '● warm 0:50' }))?.props).toEqual({ color: 'warning' })
+  await ui.unmount()
+
+  await clock.advance(60_000)
+  ui = await mount()
+  expect((await ui.find({ type: 'Text', text: '○ cold · next msg ~$0.30' }))?.props).toEqual({ color: 'error' })
+  expect(await ui.find({ type: 'Text', text: ' · ctx 60k/200k 30%' })).toBeDefined()
 })
 
 test('a subagent turn keeps the hint unchanged', { options: HINT_OPTIONS }, async ($, on) => {
@@ -192,7 +239,7 @@ test('the hint still goes cold when the machine slept through the TTL', { option
   t += 3_600_000
   await tick()
 
-  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · ctx 60k/200k 30%')
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · next msg ~$0.30 · ctx 60k/200k 30%')
 })
 
 test('ctx is measured against the compaction threshold', { options: HINT_OPTIONS }, async ($, on) => {
@@ -237,6 +284,18 @@ test('the hint draws the context at start, before any reply', { options: HINT_OP
   expect(await hintTail(v => $.ui.mount(v))).toBe('  ◌ waiting · ctx 60k/200k 30%')
 })
 
+test('a fresh session with no token count yet still draws the hint', { options: HINT_OPTIONS }, async ($, on) => {
+  mock.clock(on)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 0 } } }) as never)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  captureTail(on)
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ◌ waiting · ctx 0/200k 0%')
+})
+
 test('show and hide set the hint, a bare command toggles it', { options: HINT_OPTIONS }, async ($, on) => {
   answerUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
@@ -279,7 +338,7 @@ test('a compaction redraws the context and the cache as cold', { options: HINT_O
 
   await $.session.compact({ trigger: 'manual', messages: summary })
 
-  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · ctx 12k/200k 6%')
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · next msg ~$0.06 · ctx 12k/200k 6%')
 })
 
 test('a /model switch leaves the other model cold until switched back', { options: HINT_OPTIONS }, async ($, on) => {
@@ -304,7 +363,7 @@ test('a /model switch leaves the other model cold until switched back', { option
   }
 
   await switchTo('claude-sonnet-5-5')
-  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · ctx 60k/200k 30%')
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · next msg ~$0.15 · ctx 60k/200k 30%')
 
   await switchTo(OPUS)
   expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 5:00 · ctx 60k/200k 30%')
