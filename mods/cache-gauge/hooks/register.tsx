@@ -18,12 +18,19 @@ import {
   weightedUnits,
 } from './pricing'
 import type { Ttl } from './pricing'
+import { alarmMode, createAlarm } from './alarm'
 import { createHerdr } from './herdr'
 
 const PLUGIN = 'cache-gauge'
 const snapshot = atom({ plugin: 'cache-gauge', key: 'snapshot' } as const, null)
 const isHidden = atom({ plugin: 'cache-gauge', key: 'isHidden' } as const, false)
 const now = atom({ plugin: 'cache-gauge', key: 'now' } as const, 0)
+// True while a main-conversation compaction runs; flipping it is what redraws the line, since the tick stops once it has drawn cold.
+const isCompacting = atom({ plugin: 'cache-gauge', key: 'isCompacting' } as const, false)
+// True while a subagent works: the main cache is then not counting down for the user to act on.
+const isAgentsBusy = atom({ plugin: 'cache-gauge', key: 'isAgentsBusy' } as const, false)
+// A subagent with no step for this long no longer counts (one that died without a turn.complete).
+const AGENT_STALE_MS = 600_000
 
 type Herdr = ReturnType<typeof createHerdr>
 
@@ -62,7 +69,11 @@ const onAbovePrompt = (on: On, getTtl: () => Ttl) => {
 
     let state
     let consequence
-    if (snap.respondedAt === null) {
+    const busy = (await read($, isCompacting)) ? '◌ compacting' : (await read($, isAgentsBusy)) ? '◌ agent working' : null
+    if (busy !== null) {
+      state = <Text dimColor>{busy}</Text>
+      consequence = ''
+    } else if (snap.respondedAt === null) {
       state = <Text dimColor>◌ waiting for a reply</Text>
       consequence = ''
     } else {
@@ -116,8 +127,11 @@ const onPromptHint = (on: On, getTtl: () => Ttl, isColored: boolean) => {
     const ttl = getTtl()
     const { limit, ctx, leftMs, isWarm } = gaugeState(snap, ttl, await read($, now))
     const isEnding = isWarm && leftMs <= 60_000
+    const busy = (await read($, isCompacting)) ? '◌ compacting' : (await read($, isAgentsBusy)) ? '◌ agent working' : null
     let state = '◌ waiting'
-    if (snap.respondedAt !== null) {
+    if (busy !== null) {
+      state = busy
+    } else if (snap.respondedAt !== null) {
       // Mid-turn every request restarts the lifetime: count down only once idle.
       if (isWarm) {
         // Uncoloured, the last minute blinks the dot once a second (the clock ticks at 1 Hz).
@@ -140,7 +154,7 @@ const onPromptHint = (on: On, getTtl: () => Ttl, isColored: boolean) => {
 
     // A tail is one dim string, so colour means drawing the line here instead of calling next.
     const { Box, Text } = $.ui.resolve(e)
-    const color = snap.respondedAt === null ? undefined : !isWarm ? 'error' : isEnding && !e.props.isWorking ? 'warning' : undefined
+    const color = busy !== null || snap.respondedAt === null ? undefined : !isWarm ? 'error' : isEnding && !e.props.isWorking ? 'warning' : undefined
     const lead = `${e.props.hint ?? ''}${e.props.tail ? `${e.props.tail} · ` : '  '}`
 
     return (
@@ -167,6 +181,30 @@ export const register: Register = (on, options) => {
   let warmUntil = 0
   let drawnAt = 0
   const herdr = createHerdr(getTtl)
+  const alarm = createAlarm(alarmMode(options.alarm), typeof options.alarmSound === 'string' ? options.alarmSound.trim() : '')
+  // Set by the first model request of a turn, cleared when the turn completes.
+  let isTurnActive = false
+  // Mirrors the isCompacting atom for code that cannot read atoms.
+  let isCompactingNow = false
+  // Start time of the current turn's latest main request; null before its first.
+  let stepStartedAt: number | null = null
+  // Subagents mid-work: agentId -> time of their last step. Mirrors the isAgentsBusy atom in isAgentsNow.
+  const activeAgents = new Map<string, number>()
+  let isAgentsNow = false
+  // Drops agents with no recent step; true when whether any is active changed.
+  const sweepAgents = (t: number) => {
+    for (const [id, at] of activeAgents) {
+      if (t - at > AGENT_STALE_MS) {
+        activeAgents.delete(id)
+      }
+    }
+    const isBusy = activeAgents.size > 0
+    const isChanged = isBusy !== isAgentsNow
+    isAgentsNow = isBusy
+    herdr.setAgents(isBusy)
+
+    return isChanged
+  }
 
   on('session.start', async ($, e, next) => {
     ttl = await resolveFrom($, options.cacheTtl)
@@ -209,13 +247,52 @@ export const register: Register = (on, options) => {
     // Ticks until the band has drawn the cache cold. Not a time window: a machine
     // that sleeps through the expiry wakes to a first tick long past it.
     $.clock.every(1000, () => {
-      if (drawnAt > warmUntil) {
+      if (drawnAt > warmUntil && !isAgentsNow) {
         return
       }
       void $.clock.now().then(async t => {
         drawnAt = t
+        if (sweepAgents(t)) {
+          await update($, isAgentsBusy, () => isAgentsNow)
+        }
         await update($, now, () => t)
         await sync($, herdr, t)
+        const snap = await read($, snapshot)
+        const cost = snap === null ? null : nextCost(snap.ctxTokens, snap.baseUsd, snap.currentModel ?? snap.model, ttl)
+        const mark = snap?.isCalibrated ? '' : '~'
+        const prices = cost === null ? null : { warm: `${mark}${usd(cost.warm)}`, cold: `${mark}${usd(cost.cold)}` }
+        alarm.tick(
+          {
+            notify: (body, isFirst) => {
+              if (isFirst) {
+                $.ui.toast(body, { timeoutMs: 8000 })
+              }
+              // $.ui.notify and herdr's toast never reached the user inside herdr; Notification Center does.
+              // terminal-notifier's click returns to this agent, and its group replaces the earlier message in place;
+              // without it (or if it fails) a plain banner.
+              const focus = herdr.focusCommand
+              const click = focus === '' ? [] : ['-activate', 'com.mitchellh.ghostty', '-execute', focus]
+              const sound = isFirst ? ['-sound', 'Sosumi'] : []
+              const banner = () =>
+                $.process
+                  .run(['osascript', '-e', `display notification "${body}" with title "Cache ending"${isFirst ? ' sound name "Sosumi"' : ''}`])
+                  .catch(() => {})
+              void $.process
+                .run(['terminal-notifier', '-title', 'Cache ending', '-message', body, ...sound, '-group', 'cache-gauge', ...click])
+                .then(r => (r.exitCode === 0 ? undefined : banner()))
+                .catch(banner)
+            },
+            clear: () => {
+              void $.process.run(['terminal-notifier', '-remove', 'cache-gauge']).catch(() => {})
+            },
+            play: (clip, signal) => $.audio.play(clip, { signal }),
+            readBytes: async path => (await $.fs.read(path, { as: 'bytes' })).base64,
+          },
+          t,
+          warmUntil,
+          !isTurnActive && !isCompactingNow && !isAgentsNow,
+          prices,
+        )
       })
     })
 
@@ -253,10 +330,16 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if (e.agentId !== undefined) {
       sawSubagent = true
+      activeAgents.delete(e.agentId)
+      if (sweepAgents(await $.clock.now())) {
+        await update($, isAgentsBusy, () => isAgentsNow)
+        await sync($, herdr)
+      }
 
       return result
     }
     herdr.setWorking(false)
+    isTurnActive = false
     if (!e.usage) {
       return result
     }
@@ -274,7 +357,10 @@ export const register: Register = (on, options) => {
     lastUsd = sessionUsd
     sawSubagent = false
 
-    const respondedAt = await $.clock.now()
+    // The lifetime runs from the start of the turn's last request, which turn.step already recorded.
+    const completedAt = await $.clock.now()
+    const respondedAt = stepStartedAt ?? completedAt
+    stepStartedAt = null
     warmUntil = respondedAt + ttlMs(ttl)
     const breakdown = usage.context.breakdown
     const fresh: Snapshot = {
@@ -289,74 +375,139 @@ export const register: Register = (on, options) => {
       isCalibrated: baseUsd !== null,
     }
     await update($, snapshot, () => fresh)
-    drawnAt = respondedAt
-    await update($, now, () => respondedAt)
-    await sync($, herdr, respondedAt)
+    drawnAt = completedAt
+    await update($, now, () => completedAt)
+    await sync($, herdr, completedAt)
 
     return result
+  })
+
+  // The turn is active from its start, not from its first response: the request in flight has already refreshed the cache.
+  // The countdown is untouched here: a turn aborted before any request sent nothing.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      isTurnActive = true
+      // A step start left over from an earlier turn must not anchor this one if it sends no request.
+      stepStartedAt = null
+      alarm.reset()
+    }
+
+    return next(e)
   })
 
   // Every main-loop request reads the cache and restarts its lifetime, so a long
   // turn of tool calls keeps it warm; the turn's end alone would draw it cold.
   on('turn.step', async function* ($, e, next) {
+    // A subagent's request leaves the main cache alone, but while it works the user has nothing to act on.
+    if (e.agentId !== undefined) {
+      const t = await $.clock.now()
+      sweepAgents(t)
+      if (activeAgents.size === 0) {
+        alarm.reset()
+      }
+      activeAgents.set(e.agentId, t)
+      if (sweepAgents(t)) {
+        await update($, isAgentsBusy, () => true)
+        await sync($, herdr, t)
+      }
+    }
+    // The API measures the lifetime from the start of the request, so a long response counts against it.
+    const isMain = e.agentId === undefined
+    if (isMain) {
+      const startedAt = await $.clock.now()
+      stepStartedAt = startedAt
+      warmUntil = startedAt + ttlMs(ttl)
+      herdr.setWorking(true)
+      isTurnActive = true
+      alarm.reset()
+      const held = await read($, snapshot)
+      if (held !== null) {
+        // Holds the start of the last request, not the end of the response.
+        await update($, snapshot, () => ({ ...held, respondedAt: startedAt, isCompacted: false }))
+      }
+      drawnAt = startedAt
+      await update($, now, () => startedAt)
+      await sync($, herdr, startedAt)
+    }
     const result = yield* next(e)
-    if (e.agentId !== undefined || result.usage === null) {
+    if (e.agentId !== undefined) {
+      activeAgents.set(e.agentId, await $.clock.now())
+
       return result
     }
-    herdr.setWorking(true)
+    if (result.usage === null) {
+      return result
+    }
     const held = await read($, snapshot)
     if (held !== null) {
       const usage = await $.session.usage({ breakdown: 'summary' })
-      const respondedAt = await $.clock.now()
-      warmUntil = respondedAt + ttlMs(ttl)
       const model = result.usage.model
       const base = baseFor(model)
       await update($, snapshot, () => ({
         ...held,
         ctxTokens: usage.context.tokens ?? held.ctxTokens,
-        respondedAt,
-        isCompacted: false,
         model,
         currentModel: model,
         baseUsd: base ?? ratesFor(model).input,
         isCalibrated: base !== null,
       }))
-      drawnAt = respondedAt
-      await update($, now, () => respondedAt)
-      await sync($, herdr, respondedAt)
+      await sync($, herdr)
     }
 
     return result
   })
 
+  // The clip stops at the keystroke that sends a message, not at the reply's first request.
+  on('prompt.submit', async ($, e, next) => {
+    alarm.reset()
+
+    return next(e)
+  })
+
   // Tokens outlive the session in herdr's sidebar until removed.
   on('session.end', async ($, e, next) => {
+    alarm.reset()
     await herdr.clear()
 
     return next(e)
   })
 
   on('session.compact', async ($, e, next) => {
-    const result = await next(e)
-    if (e.trigger === 'precompute' || e.agentId !== undefined || result.skip !== undefined) {
-      return result
+    if (e.trigger === 'precompute' || e.agentId !== undefined) {
+      return next(e)
     }
-    const held = await read($, snapshot)
-    const usage = await $.session.usage({ breakdown: 'summary' })
-    // The summarizer's cost is in the session total but in no reply's tokens.
-    lastUsd = usage.cost?.usd ?? lastUsd
-    if (held !== null) {
-      // The compacted conversation is a new prefix: nothing of it is cached yet.
-      warmUntil = 0
-      await update($, snapshot, () => ({
-        ...held,
-        ctxTokens: result.tokensAfter ?? usage.context.tokens ?? held.ctxTokens,
-        isCompacted: true,
-      }))
+    // A compaction can run for minutes: show it, keep the alarm quiet and take down its notification.
+    isCompactingNow = true
+    herdr.setCompacting(true)
+    await update($, isCompacting, () => true)
+    alarm.reset()
+    await sync($, herdr)
+    try {
+      const result = await next(e)
+      if (result.skip !== undefined) {
+        return result
+      }
+      const held = await read($, snapshot)
+      const usage = await $.session.usage({ breakdown: 'summary' })
+      // The summarizer's cost is in the session total but in no reply's tokens.
+      lastUsd = usage.cost?.usd ?? lastUsd
+      if (held !== null) {
+        // The compacted conversation is a new prefix: nothing of it is cached yet.
+        warmUntil = 0
+        await update($, snapshot, () => ({
+          ...held,
+          ctxTokens: result.tokensAfter ?? usage.context.tokens ?? held.ctxTokens,
+          isCompacted: true,
+        }))
+      }
+
+      return result
+    } finally {
+      isCompactingNow = false
+      herdr.setCompacting(false)
+      await update($, isCompacting, () => false)
       await sync($, herdr)
     }
-
-    return result
   })
 
   // `/model` (and `/fast`, when it promotes the model) points the next message at

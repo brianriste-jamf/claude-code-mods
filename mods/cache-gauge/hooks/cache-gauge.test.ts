@@ -1,8 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { alarmMode, alarmPhase, coldText, endingText } from './alarm'
 import { shortModel } from './herdr'
-import { bar, calibrate, level, nextCost, ratesFor, weightedUnits } from './pricing'
+import { bar, calibrate, level, nextCost, ratesFor, usd, weightedUnits } from './pricing'
 
 const OPUS = 'claude-opus-5-5'
 const near = (actual: number | null, expected: number) =>
@@ -761,6 +762,10 @@ const herdrCalls = (on: On, pane: string, isBroken = false) => {
     if (e.argv[0] === 'sh') {
       return ok(pane)
     }
+    // The alarm's notifications are not herdr reports.
+    if (e.argv[0] === 'terminal-notifier') {
+      return ok('')
+    }
     calls.push([...e.argv])
 
     return isBroken ? ({ deny: 'herdr is not installed' } as never) : ok('')
@@ -770,7 +775,7 @@ const herdrCalls = (on: On, pane: string, isBroken = false) => {
 }
 // The reports are fire-and-forget: let them run before looking.
 const flush = () => new Promise(resolve => setTimeout(resolve, 5))
-const reply = ($: Parameters<Parameters<typeof test>[1]>[0]) =>
+const answerTurn = ($: Parameters<Parameters<typeof test>[1]>[0]) =>
   $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
 
 test('outside herdr nothing is reported', async ($, on) => {
@@ -779,7 +784,7 @@ test('outside herdr nothing is reported', async ($, on) => {
   on('turn.complete', () => ({ text: '' }))
 
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
-  await reply($)
+  await answerTurn($)
   await flush()
 
   expect(calls).toEqual([])
@@ -794,7 +799,7 @@ test('in herdr the start reports waiting, a reply reports warm with its lifetime
   await flush()
   expect(calls).toEqual([[...REPORT, 'cache=waiting'], [...REPORT, 'ctx=30', '--ttl-ms', DAY]])
 
-  await reply($)
+  await answerTurn($)
   await flush()
   expect(calls.slice(2)).toEqual([agent('opus 5.5'), [...REPORT, 'cache=warm 5m', '--ttl-ms', '300000']])
 })
@@ -828,7 +833,7 @@ test('the warm token carries the time left, and the TTL crossing reports cold wi
     })
   }
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
-  await reply($)
+  await answerTurn($)
   await clock.advance(100_000)
   await switchTo('claude-sonnet-5-5')
   await switchTo(OPUS)
@@ -850,7 +855,7 @@ test('values that did not change are not sent again; a new reply refreshes the w
   const clock = bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
-  await reply($)
+  await answerTurn($)
   await flush()
   const sent = calls.length
 
@@ -858,7 +863,7 @@ test('values that did not change are not sent again; a new reply refreshes the w
   await flush()
   expect(calls.length).toBe(sent)
 
-  await reply($)
+  await answerTurn($)
   await flush()
   expect(calls.slice(sent)).toEqual([[...REPORT, 'cache=warm 5m', '--ttl-ms', '300000']])
 })
@@ -870,14 +875,18 @@ test('a compaction reports cold and the new context', async ($, on) => {
   const summary = [{ role: 'user', text: 'summary', toolUses: [] }] as const
   on('session.compact', () => ({ messages: summary, tokensBefore: 60_000, tokensAfter: 12_000 }))
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
-  await reply($)
+  await answerTurn($)
   await flush()
   const sent = calls.length
 
   await $.session.compact({ trigger: 'manual', messages: summary })
   await flush()
 
-  expect(calls.slice(sent)).toEqual([[...REPORT, 'cache=cold'], [...REPORT, 'ctx=6', '--ttl-ms', DAY]])
+  expect(calls.slice(sent)).toEqual([
+    [...REPORT, 'cache=compacting', '--ttl-ms', '600000'],
+    [...REPORT, 'cache=cold'],
+    [...REPORT, 'ctx=6', '--ttl-ms', DAY],
+  ])
 })
 
 test('a herdr that fails leaves the gauge drawing', { options: ABOVE_OPTIONS }, async ($, on) => {
@@ -886,7 +895,7 @@ test('a herdr that fails leaves the gauge drawing', { options: ABOVE_OPTIONS }, 
   on('turn.complete', () => ({ text: '' }))
 
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
-  await reply($)
+  await answerTurn($)
   await flush()
 
   expect(calls.length > 0).toBe(true)
@@ -899,7 +908,7 @@ test('the countdown steps every 30 s, ends at 0.5m, then cold', async ($, on) =>
   const clock = bandUsage(on, { usd: 0.099 })
   on('turn.complete', () => ({ text: '' }))
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
-  await reply($)
+  await answerTurn($)
   await clock.advance(301_000)
   await flush()
 
@@ -921,7 +930,7 @@ test('mid-turn the cache token is plain warm, and the countdown returns with the
     return step
   })
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
-  await reply($)
+  await answerTurn($)
   await clock.advance(30_000)
   for await (const chunk of $.turn.step({ turnId: 't2', index: 0, model: OPUS, messageCount: 3 })) {
     void chunk
@@ -930,9 +939,10 @@ test('mid-turn the cache token is plain warm, and the countdown returns with the
   await flush()
   expect(calls.at(-1)).toEqual([...REPORT, 'cache=warm', '--ttl-ms', '300000'])
 
-  await reply($)
+  await answerTurn($)
   await flush()
-  expect(calls.at(-1)).toEqual([...REPORT, 'cache=warm 5m', '--ttl-ms', '300000'])
+  // Anchored to the step's start, 100 s ago.
+  expect(calls.at(-1)).toEqual([...REPORT, 'cache=warm 3.5m', '--ttl-ms', '200000'])
 })
 
 test('the end of the session clears both tokens', async ($, on) => {
@@ -968,4 +978,604 @@ test('the display agent is the model, short', () => {
   expect(shortModel('claude-haiku-5-5-20260101')).toBe('haiku 5.5')
   expect(shortModel('claude-3-5-sonnet-20241022')).toBe('claude-3-5-sonnet-20241022')
   expect(shortModel('my-model')).toBe('my-model')
+})
+
+test('the alarm phases: a warning inside 1 min, the clip inside 15 s, nothing mid-turn or once cold', () => {
+  expect(alarmPhase(61_000, true)).toBe('none')
+  expect(alarmPhase(60_000, true)).toBe('notify')
+  expect(alarmPhase(15_001, true)).toBe('notify')
+  expect(alarmPhase(15_000, true)).toBe('sound')
+  expect(alarmPhase(1, true)).toBe('sound')
+  expect(alarmPhase(0, true)).toBe('none')
+  expect(alarmPhase(10_000, false)).toBe('none')
+  expect(alarmMode(undefined)).toBe('notify')
+  expect(alarmMode('countdown')).toBe('countdown')
+  expect(alarmMode('notify')).toBe('notify')
+  expect(alarmMode('off')).toBe('off')
+})
+
+// Records what the alarm raises: toasts, notification calls (message and sound), removals, clips.
+const recordAlarm = (on: On) => {
+  const raised = { toasts: 0, notices: [] as { message: string; sound: boolean }[], removed: 0, clips: [] as string[] }
+  on('ui.toast', () => {
+    raised.toasts += 1
+
+    return { value: undefined }
+  })
+  on('process.run', (_$, e) => {
+    if (e.argv[0] === 'terminal-notifier') {
+      if (e.argv.includes('-remove')) {
+        raised.removed += 1
+      } else {
+        raised.notices.push({ message: e.argv[e.argv.indexOf('-message') + 1] ?? '', sound: e.argv.includes('-sound') })
+      }
+    }
+
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  on('audio.play', (_$, e) => {
+    raised.clips.push(e.clip.asset ?? 'other')
+
+    return { value: undefined }
+  })
+
+  return raised
+}
+
+// What the alarm quotes for the seeded session: 60k tokens of context, priced at `base`.
+const quoted = (base: number, mark: string) => {
+  const cost = nextCost(60_000, base, OPUS, '5m')
+
+  return { warm: `${mark}${usd(cost.warm)}`, cold: `${mark}${usd(cost.cold)}` }
+}
+
+test('the notification steps: 1 min with sound and toast, 15 s and cold replace it silently, each with the prices', async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  // No usable cost sample, so the rate is the list one and the prices carry `~`.
+  const prices = quoted(ratesFor(OPUS).input, '~')
+
+  await clock.advance(230_000)
+  expect(raised.notices).toEqual([])
+  expect(raised.toasts).toBe(0)
+  await clock.advance(10_000)
+  expect(raised.notices).toEqual([
+    { message: `Cache ending in 1m. Reply to keep your next message at ${prices.warm}; cold it costs ${prices.cold}.`, sound: true },
+  ])
+  expect(raised.notices[0]?.message).toContain('~$')
+  expect(raised.toasts).toBe(1)
+  await clock.advance(45_000)
+  expect(raised.notices[1]).toEqual({
+    message: `Cache ending in 15s. Reply to keep your next message at ${prices.warm}; cold it costs ${prices.cold}.`,
+    sound: false,
+  })
+  await clock.advance(20_000)
+  expect(raised.notices[2]).toEqual({
+    message: `Cache is cold. Your next message costs ${prices.cold} (warm: ${prices.warm}).`,
+    sound: false,
+  })
+  await clock.advance(60_000)
+  expect(raised.notices.length).toBe(3)
+  expect(raised.toasts).toBe(1)
+  expect(raised.clips).toEqual([])
+})
+
+test('a calibrated session quotes its prices without the ~', async ($, on) => {
+  const raised = recordAlarm(on)
+  const cost = { usd: 0 }
+  const clock = answerUsage(on, cost)
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  cost.usd = 0.099
+  await answerTurn($)
+  const base = calibrate(null, 0.099, weightedUnits(TURN_USAGE, OPUS, '5m')) ?? 0
+  const prices = quoted(base, '')
+
+  await clock.advance(240_000)
+  expect(raised.notices[0]?.message).toBe(
+    `Cache ending in 1m. Reply to keep your next message at ${prices.warm}; cold it costs ${prices.cold}.`,
+  )
+  expect(raised.notices[0]?.message).not.toContain('~')
+})
+
+test('the alarm texts fall back to no prices before there is a snapshot', () => {
+  expect(endingText('1m', null)).toBe('Cache ending in 1m. Reply to keep it warm.')
+  expect(endingText('15s', null)).toBe('Cache ending in 15s. Reply to keep it warm.')
+  expect(coldText(null)).toBe('Cache is cold. The next message re-sends the full context.')
+  const prices = { warm: '$0.06', cold: '~$1.56' }
+  expect(endingText('1m', prices)).toBe('Cache ending in 1m. Reply to keep your next message at $0.06; cold it costs ~$1.56.')
+  expect(coldText(prices)).toBe('Cache is cold. Your next message costs ~$1.56 (warm: $0.06).')
+})
+
+test('alarm countdown also starts the clip at 15 s, once', { options: { alarm: 'countdown' } }, async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(284_000)
+  expect(raised.clips).toEqual([])
+  await clock.advance(1000)
+  expect(raised.clips).toEqual(['sounds/countdown.mp3'])
+  await clock.advance(40_000)
+  expect(raised.clips.length).toBe(1)
+})
+
+test('alarm off raises nothing', { options: { alarm: 'off' } }, async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(320_000)
+  expect(raised).toMatchObject({ toasts: 0, notices: [], clips: [], removed: 0 })
+})
+
+test('a reply during the countdown removes the notification and starts a new period that warns again', async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(275_000)
+  expect(raised.notices.length).toBe(1)
+  expect(raised.removed).toBe(0)
+  await $.prompt.submit({ text: 'hi' })
+  expect(raised.removed).toBe(1)
+  await answerTurn($)
+  await clock.advance(275_000)
+  expect(raised.notices.length).toBe(2)
+  expect(raised.toasts).toBe(2)
+})
+
+test('in herdr the notification click focuses this agent with herdr by full path and socket', async ($, on) => {
+  const calls: string[][] = []
+  on('process.run', (_$, e) => {
+    calls.push([...e.argv])
+    if (e.argv[0] === 'sh') {
+      return ok(e.argv[2]?.includes('HERDR_PANE_ID') ? PANE : '/tmp/h.sock\n/opt/homebrew/bin/herdr')
+    }
+
+    return ok('')
+  })
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  await clock.advance(275_000)
+  await flush()
+
+  const notice = calls.find(argv => argv[0] === 'terminal-notifier')
+  expect(notice?.slice(notice.indexOf('-activate'))).toEqual([
+    '-activate',
+    'com.mitchellh.ghostty',
+    '-execute',
+    "HERDR_SOCKET_PATH='/tmp/h.sock' '/opt/homebrew/bin/herdr' agent focus 'w4:p1'",
+  ])
+})
+
+// Compaction in flight: the base handler runs beneath the mod's hook, while it awaits `next`.
+const SUMMARY = [{ role: 'user', text: 'summary', toolUses: [] }] as const
+const COMPACT = { trigger: 'manual', messages: SUMMARY } as const
+const compactResult = { messages: SUMMARY, tokensBefore: 60_000, tokensAfter: 12_000 }
+
+test('the hint shows compacting, not cold, while a compaction runs past the expiry', { options: HINT_OPTIONS }, async ($, on) => {
+  const clock = answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  const during: (string | undefined)[] = []
+  on('session.compact', async () => {
+    await clock.advance(20_000)
+    during.push(await hintTail(v => $.ui.mount(v)))
+
+    return compactResult
+  })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(285_000)
+
+  await $.session.compact(COMPACT)
+
+  expect(during[0]).toContain('◌ compacting')
+  expect(during[0]).not.toContain('cold')
+  expect(during[0]).toContain('ctx 60k/200k')
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · next msg ~$0.06 · ctx 12k/200k 6%')
+})
+
+test('the band shows compacting, not cold, while a compaction runs past the expiry', { options: ABOVE_OPTIONS }, async ($, on) => {
+  const clock = bandUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  const during: { compacting: boolean; cold: boolean; dim: boolean }[] = []
+  on('session.compact', async () => {
+    await clock.advance(20_000)
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    const text = await ui.find({ type: 'Text', text: '◌ compacting' })
+    during.push({
+      compacting: text !== undefined,
+      cold: (await ui.find({ type: 'Text', text: /cold/ })) !== undefined,
+      dim: text?.props.dimColor === true,
+    })
+    await ui.unmount()
+
+    return compactResult
+  })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(285_000)
+
+  await $.session.compact(COMPACT)
+
+  expect(during).toEqual([{ compacting: true, cold: false, dim: true }])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: '○ cold' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '◌ compacting' })).toBeUndefined()
+})
+
+test('herdr reports cache=compacting through the expiry of a compaction and cold after', async ($, on) => {
+  const calls = herdrCalls(on, PANE)
+  const clock = bandUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  let sent = 0
+  const caches = () => calls.slice(sent).filter(c => c[REPORT.length]?.startsWith('cache=')).map(c => c.slice(REPORT.length))
+  const during: string[][][] = []
+  on('session.compact', async () => {
+    await flush()
+    during.push(caches())
+    await clock.advance(20_000)
+    await flush()
+    during.push(caches())
+
+    return compactResult
+  })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(285_000)
+  await flush()
+  sent = calls.length
+
+  await $.session.compact(COMPACT)
+  await flush()
+
+  // Before and after the expiry the only report is compacting, never cold.
+  const compacting = [['cache=compacting', '--ttl-ms', '600000']]
+  expect(during).toEqual([compacting, compacting])
+  expect(caches()).toEqual([...compacting, ['cache=cold']])
+})
+
+test('a compaction takes the alarm notification down and keeps it quiet through the expiry', async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+  on('session.compact', async () => {
+    await clock.advance(62_000)
+
+    return compactResult
+  })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(240_000)
+  expect(raised.notices.length).toBe(1)
+  expect(raised.removed).toBe(0)
+
+  await $.session.compact(COMPACT)
+  await flush()
+
+  expect(raised.removed).toBe(1)
+  expect(raised.notices.length).toBe(1)
+  await clock.advance(120_000)
+  expect(raised.notices.length).toBe(1)
+})
+
+test('a compaction that crosses the expiry posts no notification of its own', async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+  on('session.compact', async () => {
+    await clock.advance(66_000)
+
+    return compactResult
+  })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(235_000)
+
+  await $.session.compact(COMPACT)
+
+  expect(raised.notices).toEqual([])
+  expect(raised.toasts).toBe(0)
+})
+
+test('a precompute or subagent compaction does not set the compacting state', { options: HINT_OPTIONS }, async ($, on) => {
+  const clock = answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  const during: (string | undefined)[] = []
+  on('session.compact', async () => {
+    await clock.advance(1000)
+    during.push(await hintTail(v => $.ui.mount(v)))
+
+    return compactResult
+  })
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+
+  await $.session.compact({ trigger: 'precompute', messages: SUMMARY })
+  await $.session.compact({ ...COMPACT, agentId: 'sub-1' })
+
+  expect(during.length).toBe(2)
+  for (const tailText of during) {
+    expect(tailText).toContain('warm')
+    expect(tailText).not.toContain('compacting')
+  }
+})
+
+// A subagent works while the main thread is idle: its steps and its completion arrive with an agentId.
+const SUB_STEP = { turnId: 's1', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: TURN_USAGE } as const
+const answerSteps = (on: On) =>
+  on('turn.step', async function* () {
+    return SUB_STEP
+  })
+const subStep = async ($: Parameters<Parameters<typeof test>[1]>[0], agentId = 'sub') => {
+  for await (const chunk of $.turn.step({ turnId: 's1', index: 0, model: OPUS, messageCount: 3, agentId })) {
+    void chunk
+  }
+}
+const subDone = ($: Parameters<Parameters<typeof test>[1]>[0], agentId = 'sub') =>
+  $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 's1', reason: 'answer', usage: TURN_USAGE, agentId })
+
+test('while a subagent works the hint shows agent working, stays quiet, and returns to cold when it completes', { options: { position: 'hint', alarm: 'countdown' } }, async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  answerSteps(on)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+
+  await clock.advance(100_000)
+  await subStep($)
+  await clock.advance(250_000)
+
+  const during = await hintTail(v => $.ui.mount(v))
+  expect(during).toBe('  ◌ agent working · ctx 60k/200k 30%')
+  expect(raised.notices).toEqual([])
+  expect(raised.clips).toEqual([])
+  expect(raised.toasts).toBe(0)
+
+  await subDone($)
+  await clock.advance(1000)
+  expect(await hintTail(v => $.ui.mount(v))).toMatch(/^ {2}○ cold · next msg/)
+})
+
+test('hint colour leaves agent working dim', { options: COLOR_OPTIONS }, async ($, on) => {
+  const clock = answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  answerSteps(on)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(301_000)
+  await subStep($)
+
+  const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: '◌ agent working' }))?.props).toEqual({ dimColor: true })
+  expect(await ui.find({ type: 'Text', text: /cold/ })).toBeUndefined()
+})
+
+test('the band shows agent working while a subagent works', { options: ABOVE_OPTIONS }, async ($, on) => {
+  const clock = bandUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  answerSteps(on)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(301_000)
+  await subStep($)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: '◌ agent working' }))?.props).toEqual({ dimColor: true })
+  expect(await ui.find({ type: 'Text', text: /cold/ })).toBeUndefined()
+  await ui.unmount()
+
+  await subDone($)
+  const after = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await after.find({ type: 'Text', text: '○ cold' })).toBeDefined()
+})
+
+test('a subagent with no step for 10 minutes stops counting', { options: HINT_OPTIONS }, async ($, on) => {
+  const clock = answerUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  answerSteps(on)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await subStep($)
+
+  await clock.advance(400_000)
+  expect(await hintTail(v => $.ui.mount(v))).toContain('agent working')
+  await clock.advance(250_000)
+  const after = await hintTail(v => $.ui.mount(v))
+  expect(after).toContain('○ cold')
+  expect(after).not.toContain('agent working')
+})
+
+test('herdr reports cache=working while a subagent works, never cold, and cold after it completes', async ($, on) => {
+  const calls = herdrCalls(on, PANE)
+  const clock = bandUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  answerSteps(on)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(250_000)
+  await flush()
+  const caches = () => calls.filter(c => c[REPORT.length]?.startsWith('cache=')).map(c => c.slice(REPORT.length))
+  const before = caches().length
+
+  await subStep($)
+  await flush()
+  expect(caches().slice(before)).toEqual([['cache=working', '--ttl-ms', '600000']])
+
+  await clock.advance(60_000)
+  await flush()
+  expect(caches().slice(before)).toEqual([['cache=working', '--ttl-ms', '600000']])
+
+  await subDone($)
+  await flush()
+  expect(caches().slice(before)).toEqual([['cache=working', '--ttl-ms', '600000'], ['cache=cold']])
+})
+
+test('the alarm resumes when a stale subagent drops out', { options: { alarm: 'notify' } }, async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 }, { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' })
+  on('turn.complete', () => ({ text: '' }))
+  answerSteps(on)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await subStep($)
+
+  await clock.advance(3_530_000)
+  expect(raised.notices).toEqual([])
+  await clock.advance(20_000)
+  expect(raised.notices.length).toBe(1)
+  expect(raised.notices[0]?.message).toContain('Cache ending in 1m')
+})
+
+// The lifetime runs from the start of each main request: a step that takes `ctl.takes` ms advances the clock inside the engine's handler.
+const MAIN_STEP = { turnId: 't2', index: 0, answer: '', toolUses: [], stopReason: 'tool_use', usage: TURN_USAGE } as const
+const answerMainSteps = (on: On, clock: ReturnType<typeof mock.clock>) => {
+  const ctl = { takes: 0, noUsage: false, during: [] as (string | undefined)[], onTakes: async () => {} }
+  on('turn.step', async function* () {
+    await ctl.onTakes()
+    await clock.advance(ctl.takes)
+
+    return ctl.noUsage ? { ...MAIN_STEP, usage: null } : MAIN_STEP
+  })
+
+  return ctl
+}
+type Api = Parameters<Parameters<typeof test>[1]>[0]
+const mainStep = async ($: Api) => {
+  for await (const chunk of $.turn.step({ turnId: 't2', index: 0, model: OPUS, messageCount: 3 })) {
+    void chunk
+  }
+}
+const startTurn = ($: Api) => $.turn.start({ turnId: 't2' } as never)
+const abortTurn = ($: Api) =>
+  $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't2', reason: 'aborted' } as never)
+
+test('a prompt sent with 45 s left stays warm and quiet through a long first response', { options: { position: 'hint', alarm: 'countdown' } }, async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  const ctl = answerMainSteps(on, clock)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(255_000)
+  expect(raised.notices.length).toBe(1)
+
+  await $.prompt.submit({ text: 'hi' })
+  expect(raised.removed).toBe(1)
+  await startTurn($)
+  const during: (string | undefined)[] = []
+  // The old expiry passes 45 s into the request.
+  ctl.takes = 50_000
+  ctl.onTakes = async () => {
+    await clock.advance(1000)
+    during.push(await hintTail(v => $.ui.mount(v)))
+  }
+  await mainStep($)
+  during.push(await hintTail(v => $.ui.mount(v)))
+
+  expect(raised.notices.length).toBe(1)
+  expect(raised.clips).toEqual([])
+  for (const t of during) {
+    expect(t).toContain('warm')
+    expect(t).not.toContain('cold')
+  }
+  await answerTurn($)
+  expect(raised.notices.length).toBe(1)
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 4:09 · ctx 60k/200k 30%')
+})
+
+test('the countdown is anchored to the last step start: 4:00 right after a 60 s response, and the notice follows', { options: HINT_OPTIONS }, async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  const ctl = answerMainSteps(on, clock)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(10_000)
+  await startTurn($)
+  ctl.takes = 60_000
+  await mainStep($)
+  await answerTurn($)
+
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 4:00 · ctx 60k/200k 30%')
+  await clock.advance(179_000)
+  expect(raised.notices).toEqual([])
+  await clock.advance(2000)
+  expect(raised.notices.length).toBe(1)
+})
+
+test('a turn aborted before any request leaves the old countdown running and the alarm resumes', { options: HINT_OPTIONS }, async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(100_000)
+
+  await startTurn($)
+  await clock.advance(150_000)
+  // Active turn: the alarm is quiet even inside the last minute.
+  expect(raised.notices).toEqual([])
+  await abortTurn($)
+  await clock.advance(1000)
+
+  expect(raised.notices.length).toBe(1)
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 0:49 · ctx 60k/200k 30%')
+})
+
+test('a step without usage still starts the lifetime and marks the turn active', { options: HINT_OPTIONS }, async ($, on) => {
+  const raised = recordAlarm(on)
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+  const ctl = answerMainSteps(on, clock)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(100_000)
+  ctl.noUsage = true
+  await mainStep($)
+
+  await clock.advance(160_000)
+  expect(raised.notices).toEqual([])
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 2:20 · ctx 60k/200k 30%')
+})
+
+test('two steps in a row keep the cache warm and the expiry follows the second step start', { options: HINT_OPTIONS }, async ($, on) => {
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+  const ctl = answerMainSteps(on, clock)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(10_000)
+  ctl.takes = 20_000
+  await mainStep($)
+  await clock.advance(30_000)
+  await mainStep($)
+  await answerTurn($)
+
+  // Second step started at 60 s and expires at 360 s; now is 80 s.
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 4:40 · ctx 60k/200k 30%')
+  await clock.advance(250_000)
+  // The last minute blinks the dot.
+  expect(await hintTail(v => $.ui.mount(v))).toMatch(/^ {2}[●○] warm 0:30 · ctx 60k\/200k 30%$/)
 })
