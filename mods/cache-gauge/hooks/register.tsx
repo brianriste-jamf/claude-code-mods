@@ -11,6 +11,7 @@ import {
   level,
   nextCost,
   ratesFor,
+  resolveTtl,
   tokens,
   ttlMs,
   usd,
@@ -26,6 +27,19 @@ const now = atom({ plugin: 'cache-gauge', key: 'now' } as const, 0)
 
 type Herdr = ReturnType<typeof createHerdr>
 
+// Re-read where Claude Code takes the cache lifetime from; the mod option overrides it when set to 5m or 1h ('auto' defers).
+async function resolveFrom($: EngineInterface, override: unknown): Promise<Ttl> {
+  const settings: Record<string, unknown> = await $.settings.read()
+
+  return resolveTtl({
+    override,
+    force5m: await $.env.get('FORCE_PROMPT_CACHING_5M'),
+    env: await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL'),
+    setting: settings.promptCacheTtl,
+    enable1h: await $.env.get('ENABLE_PROMPT_CACHING_1H'),
+  })
+}
+
 // `t` is the time the caller already holds; without it the clock is read.
 async function sync($: EngineInterface, herdr: Herdr, t?: number) {
   if (herdr.isOn) {
@@ -33,7 +47,7 @@ async function sync($: EngineInterface, herdr: Herdr, t?: number) {
   }
 }
 
-const onAbovePrompt = (on: On, ttl: Ttl) => {
+const onAbovePrompt = (on: On, getTtl: () => Ttl) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const snap = await read($, snapshot)
     if (e.props.hasSurvey || snap === null || (await read($, isHidden))) {
@@ -42,6 +56,7 @@ const onAbovePrompt = (on: On, ttl: Ttl) => {
 
     const { Box, Text } = $.ui.resolve(e)
 
+    const ttl = getTtl()
     const { limit, ctx, leftMs, isWarm } = gaugeState(snap, ttl, await read($, now))
     const ctxPart = ` · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} `
 
@@ -90,7 +105,7 @@ const onAbovePrompt = (on: On, ttl: Ttl) => {
   })
 }
 
-const onPromptHint = (on: On, ttl: Ttl, isColored: boolean) => {
+const onPromptHint = (on: On, getTtl: () => Ttl, isColored: boolean) => {
   // Dim tail on the hint line under the prompt: cache state and context fill only.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const snap = await read($, snapshot)
@@ -98,6 +113,7 @@ const onPromptHint = (on: On, ttl: Ttl, isColored: boolean) => {
       return next(e)
     }
 
+    const ttl = getTtl()
     const { limit, ctx, leftMs, isWarm } = gaugeState(snap, ttl, await read($, now))
     const isEnding = isWarm && leftMs <= 60_000
     let state = '◌ waiting'
@@ -138,7 +154,9 @@ const onPromptHint = (on: On, ttl: Ttl, isColored: boolean) => {
 }
 
 export const register: Register = (on, options) => {
-  const ttl: Ttl = options.cacheTtl === '1h' ? '1h' : '5m'
+  // Read at use time: `resolveFrom` re-resolves it at session start and after each turn.
+  let ttl: Ttl = '5m'
+  const getTtl = () => ttl
   const position = options.position === 'above' ? 'above' : 'hint'
   const isColored = options.hintColor === 'on'
   let lastUsd = 0
@@ -148,9 +166,10 @@ export const register: Register = (on, options) => {
   let sawSubagent = false
   let warmUntil = 0
   let drawnAt = 0
-  const herdr = createHerdr(ttl)
+  const herdr = createHerdr(getTtl)
 
   on('session.start', async ($, e, next) => {
+    ttl = await resolveFrom($, options.cacheTtl)
     await $.command.register({ name: PLUGIN, description: 'Show or hide the cache gauge' })
     const usage = await $.session.usage({ breakdown: 'summary' })
     lastUsd = usage.cost?.usd ?? 0
@@ -241,6 +260,7 @@ export const register: Register = (on, options) => {
     if (!e.usage) {
       return result
     }
+    ttl = await resolveFrom($, options.cacheTtl)
 
     const usage = await $.session.usage({ breakdown: 'summary' })
     const sessionUsd = usage.cost?.usd ?? lastUsd
@@ -363,8 +383,8 @@ export const register: Register = (on, options) => {
   })
 
   if (position === 'above') {
-    onAbovePrompt(on, ttl)
+    onAbovePrompt(on, getTtl)
   } else {
-    onPromptHint(on, ttl, isColored)
+    onPromptHint(on, getTtl, isColored)
   }
 }

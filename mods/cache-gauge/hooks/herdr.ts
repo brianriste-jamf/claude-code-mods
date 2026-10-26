@@ -25,7 +25,7 @@ type Run = (argv: string[]) => Promise<{ stdout: string }>
  * Reports the gauge as herdr pane metadata tokens (`cache`, `ctx`) when the session runs in a herdr pane.
  * Off outside herdr, and a herdr that is missing or fails never reaches the gauge.
  */
-export const createHerdr = (ttl: Ttl) => {
+export const createHerdr = (getTtl: () => Ttl) => {
   let run: Run
   let paneId = ''
   let sentCache: string | null = null
@@ -90,7 +90,7 @@ export const createHerdr = (ttl: Ttl) => {
       if (paneId === '' || snap === null) {
         return
       }
-      const { ctx, leftMs, isWarm } = gaugeState(snap, ttl, t)
+      const { ctx, leftMs, isWarm } = gaugeState(snap, getTtl(), t)
       showModel(snap.currentModel ?? snap.model)
       // The countdown steps every 30 s, rounded up, in minutes: `warm 5m`, `warm 4.5m` ... `warm 0.5m`.
       const warm = isWorking ? 'warm' : `warm ${(Math.ceil(leftMs / STEP_MS) * STEP_MS) / 60_000}m`

@@ -70,8 +70,14 @@ const captureTail = (on: On) =>
     return { type: 'Box', children: [] }
   })
 
+// Where Claude Code takes the cache lifetime from: no env var and no setting unless `env` has it.
+const answerTtlControls = (on: On, env: Record<string, string> = {}, settings: Record<string, unknown> = {}) => {
+  on('env.get', (_$, e) => ({ value: env[e.name] }))
+  on('settings.read', () => ({ value: settings }))
+}
+
 // What the engine would answer beneath the mod.
-const answerUsage = (on: On, cost: { usd: number }) => {
+const answerUsage = (on: On, cost: { usd: number }, env: Record<string, string> = {}) => {
   const clock = mock.clock(on)
   on('session.usage', () => ({
     value: {
@@ -82,6 +88,7 @@ const answerUsage = (on: On, cost: { usd: number }) => {
     },
   }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  answerTtlControls(on, env)
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   captureTail(on)
 
@@ -122,6 +129,27 @@ test('the hint shows the gauge after a turn and goes cold past the TTL', { optio
 
   await clock.advance(301_000)
   expect(await hintTail(v => $.ui.mount(v))).toBe('  ○ cold · next msg $0.30 · ctx 60k/200k 30%')
+})
+
+test('the countdown follows CLAUDE_CODE_PROMPT_CACHE_TTL: 60 minutes, still warm past 5', async ($, on) => {
+  const clock = answerUsage(on, { usd: 0.099 }, { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' })
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 60:00 · ctx 60k/200k 30%')
+
+  await clock.advance(301_000)
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 54:59 · ctx 60k/200k 30%')
+})
+
+test('an explicit cacheTtl wins over the environment', { options: { cacheTtl: '5m' } }, async ($, on) => {
+  answerUsage(on, { usd: 0.099 }, { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' })
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  expect(await hintTail(v => $.ui.mount(v))).toBe('  ● warm 5:00 · ctx 60k/200k 30%')
 })
 
 test('the dot blinks in the last minute of the hint', { options: HINT_OPTIONS }, async ($, on) => {
@@ -220,6 +248,7 @@ test('the hint still goes cold when the machine slept through the TTL', { option
     value: { startedAt: 0, context: { tokens: 60_000, window: 200_000, percent: 30 }, rateLimits: [], cost: { usd: 0.099 } },
   }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  answerTtlControls(on)
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   captureTail(on)
   on('turn.complete', () => ({ text: '' }))
@@ -258,6 +287,7 @@ test('ctx is measured against the compaction threshold', { options: HINT_OPTIONS
     },
   }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  answerTtlControls(on)
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   captureTail(on)
   on('turn.complete', () => ({ text: '' }))
@@ -288,6 +318,7 @@ test('a fresh session with no token count yet still draws the hint', { options: 
   mock.clock(on)
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000 }, rateLimits: [], cost: { usd: 0 } } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  answerTtlControls(on)
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   captureTail(on)
 
@@ -417,6 +448,7 @@ const bandUsage = (on: On, cost: { usd: number }, below: object = { type: 'Box',
     },
   }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  answerTtlControls(on)
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.render', () => below)
 
@@ -509,6 +541,7 @@ test('the band still goes cold when the machine slept through the TTL', { option
     value: { startedAt: 0, context: { tokens: 60_000, window: 200_000, percent: 30 }, rateLimits: [], cost: { usd: 0.099 } },
   }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  answerTtlControls(on)
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.render', () => ({ type: 'Box', children: [] }))
   on('turn.complete', () => ({ text: '' }))
@@ -548,6 +581,7 @@ test('ctx is measured against the compaction threshold', { options: ABOVE_OPTION
     },
   }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  answerTtlControls(on)
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.render', () => ({ type: 'Box', children: [] }))
   on('turn.complete', () => ({ text: '' }))

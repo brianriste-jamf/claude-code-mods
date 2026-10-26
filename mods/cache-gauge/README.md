@@ -32,7 +32,7 @@ The line refreshes after every model request, so a long turn of tool calls keeps
 
 | Option | Default | Meaning |
 |---|---|---|
-| `cacheTtl` | `5m` | How long the cache stays warm after a reply: `5m` or `1h`. Match it to the TTL your Claude Code session actually requests |
+| `cacheTtl` | `auto` | How long the cache stays warm after a reply. `auto` follows Claude Code's own controls, in this order: `FORCE_PROMPT_CACHING_5M=1`, `CLAUDE_CODE_PROMPT_CACHE_TTL`, the `promptCacheTtl` setting, `ENABLE_PROMPT_CACHING_1H=1`, else `5m`; re-read after each reply. `5m` or `1h` overrides all of those |
 | `position` | `hint` | `above`: the full gauge in a band above the prompt. `hint`: the compact form below, at the end of the hint line under the prompt. This fork defaults to `hint`; upstream defaults to `above` |
 | `hintColor` | `off` | `on`: with `position` `hint`, the dot and countdown turn yellow in the last minute and red when cold. The mod then draws the whole hint line itself, so a later mod's hint handler is skipped and engine changes to that line are not picked up |
 
