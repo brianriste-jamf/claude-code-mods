@@ -58,7 +58,7 @@ The bundled clip is synthesized: a triangle-wave figure over a sine thump, speed
 
 ### Switching position
 
-Run `/plugin configure cache-gauge@brian-mods` in a session, or `claude plugin configure cache-gauge@brian-mods` from a shell, and set `position`. Or set it in `settings.json`; the mod picks it up on the next plugin reload or session start:
+Run `/plugin configure cache-gauge@brian-mods` in a session and set `position`. From a shell, `claude plugin configure cache-gauge@brian-mods` only lists the options; it saves them only with `--values-stdin`. Or set it in `settings.json`; the mod picks it up on the next plugin reload or session start:
 
 ```json
 "pluginConfigs": {
