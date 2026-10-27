@@ -1579,3 +1579,28 @@ test('two steps in a row keep the cache warm and the expiry follows the second s
   // The last minute blinks the dot.
   expect(await hintTail(v => $.ui.mount(v))).toMatch(/^ {2}[●○] warm 0:30 · ctx 60k\/200k 30%$/)
 })
+
+test('the fallback banner passes the message to osascript as an argument, not inside the script', async ($, on) => {
+  const banners: string[][] = []
+  on('ui.toast', () => ({ value: undefined }))
+  on('process.run', (_$, e) => {
+    if (e.argv[0] === 'osascript') {
+      banners.push([...e.argv])
+    }
+
+    // terminal-notifier is missing, so the alarm falls back to osascript.
+    return { value: { exitCode: e.argv[0] === 'terminal-notifier' ? 127 : 0, stdout: '', stderr: '' } }
+  })
+  const clock = answerUsage(on, { usd: 0 })
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(240_000)
+
+  const argv = banners[0] ?? []
+  const message = argv.at(-1) ?? ''
+  expect(message).toContain('Cache ending in 1m.')
+  expect(argv.slice(0, -1).some(arg => arg.includes(message))).toBe(false)
+  expect(argv).toContain('on run argv')
+})

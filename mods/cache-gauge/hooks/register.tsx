@@ -273,9 +273,19 @@ export const register: Register = (on, options) => {
               const focus = herdr.focusCommand
               const click = focus === '' ? [] : ['-activate', 'com.mitchellh.ghostty', '-execute', focus]
               const sound = isFirst ? ['-sound', 'Sosumi'] : []
+              // The body goes in as an argument, never spliced into the script, so a quote in it cannot break out.
               const banner = () =>
                 $.process
-                  .run(['osascript', '-e', `display notification "${body}" with title "Cache ending"${isFirst ? ' sound name "Sosumi"' : ''}`])
+                  .run([
+                    'osascript',
+                    '-e',
+                    'on run argv',
+                    '-e',
+                    `display notification (item 1 of argv) with title "Cache ending"${isFirst ? ' sound name "Sosumi"' : ''}`,
+                    '-e',
+                    'end run',
+                    body,
+                  ])
                   .catch(() => {})
               void $.process
                 .run(['terminal-notifier', '-title', 'Cache ending', '-message', body, ...sound, '-group', 'cache-gauge', ...click])
