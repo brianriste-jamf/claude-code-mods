@@ -1,6 +1,6 @@
 import type { Snapshot } from '../types'
 
-// Rates per model family, from the claude-api skill's pricing (cached 2026-10-06).
+// Rates per model family, from Anthropic's pricing page (checked 2026-10-27).
 // `input` is the list price per uncached input token; the calibration replaces it
 // with what this session actually pays (Bedrock, enterprise pricing).
 type Rates = { input: number; read: number }
@@ -11,7 +11,8 @@ const FAMILIES: ReadonlyArray<readonly [RegExp, Rates]> = [
   [/(fable|mythos)-5/, { input: 10 * PER_MTOK, read: 0.1 }],
   [/opus-5-5/, { input: 4 * PER_MTOK, read: 0.05 }],
   [/opus/, { input: 5 * PER_MTOK, read: 0.1 }],
-  [/sonnet-(5|4-6)/, { input: 2 * PER_MTOK, read: 0.1 }],
+  [/sonnet-5-5/, { input: 2 * PER_MTOK, read: 0.05 }],
+  [/sonnet-5/, { input: 2 * PER_MTOK, read: 0.1 }],
   [/sonnet/, { input: 3 * PER_MTOK, read: 0.1 }],
   [/haiku-5-5/, { input: 0.1 * PER_MTOK, read: 0.1 }],
   [/haiku/, { input: 1 * PER_MTOK, read: 0.1 }],
