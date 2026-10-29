@@ -11,6 +11,8 @@ One line above the Claude Code prompt that answers the two questions worth actin
 |---|---|---|
 | `● warm 4:40` | Time until the prompt cache goes cold | green; yellow in the last 20% of the lifetime (the last minute on a 5m cache) |
 | `○ cold` | The cache has expired | red |
+| `◌ compacting` | A compaction is running; the cache shows cold once it finishes | dim |
+| `◌ agent working` | A subagent is working: the main cache is not counting down for you to act on | dim |
 | `◌ waiting for a reply` | Right after a start or reload: the context is known, the cache's state is not until a reply finishes | dim |
 | `next msg $0.06` | What the next message pays to re-send the context: a cache read while warm, a full cache write once cold. Your new text and the reply are not included | |
 | `(cold $1.56)` | While warm: what that same message would pay if you let the cache lapse | |
@@ -18,7 +20,7 @@ One line above the Claude Code prompt that answers the two questions worth actin
 
 A `~` before the price means it is still the list price: no reply has given a usable calibration sample yet.
 
-The line refreshes after every model request, so a long turn of tool calls keeps the cache warm rather than draining it from the previous reply. While Claude is working it shows just `● warm`; the countdown starts once the turn ends and nothing is being sent. Price calibration still happens once per reply. With `cache-keepalive` armed, its line sits right under this one. The countdown ticks every second while the cache is warm and stops once it has drawn it cold, and it catches up correctly after the machine sleeps through the expiry.
+The line refreshes after every model request, so a long turn of tool calls keeps the cache warm rather than draining it from the previous reply. The countdown runs from the start of the last request (as the API measures it), so a long final answer shortens it. While Claude is working it shows just `● warm`; the countdown starts once the turn ends and nothing is being sent. Price calibration still happens once per reply. With `cache-keepalive` armed, its line sits right under this one. The countdown ticks every second while the cache is warm and stops once it has drawn it cold, and it catches up correctly after the machine sleeps through the expiry.
 
 ## Commands
 
@@ -32,8 +34,27 @@ The line refreshes after every model request, so a long turn of tool calls keeps
 
 | Option | Default | Meaning |
 |---|---|---|
-| `cacheTtl` | `5m` | How long the cache stays warm after a reply: `5m` or `1h`. Match it to the TTL your Claude Code session actually requests |
+| `cacheTtl` | `auto` | How long the cache stays warm after a reply. `auto` follows Claude Code's own controls, in this order: `FORCE_PROMPT_CACHING_5M=1`, `CLAUDE_CODE_PROMPT_CACHE_TTL`, the `promptCacheTtl` setting, `ENABLE_PROMPT_CACHING_1H=1`, else `5m`; re-read after each reply. `5m` or `1h` overrides all of those |
 | `position` | `hint` | `above`: the full gauge in a band above the prompt. `hint`: the compact form below, at the end of the hint line under the prompt. This fork defaults to `hint`; upstream defaults to `above` |
+| `hintColor` | `off` | `on`: with `position` `hint`, the dot and countdown turn yellow in the last minute and red when cold. The mod then draws the whole hint line itself, so a later mod's hint handler is skipped and engine changes to that line are not picked up |
+| `alarm` | `notify` | `notify`: a warning 1 min before an idle cache goes cold. `countdown`: the warning, then a tense 15 s clip for the last 15 s. `off`: neither |
+| `alarmSound` | empty | Absolute path to your own mp3, wav, m4a or aiff (4 MiB at most) to play instead of the bundled clip. An unreadable path falls back to the bundled one |
+
+## Alarm
+
+Once idle, the gauge raises one macOS notification per warm period and updates it in place (the same `terminal-notifier` group):
+
+| Time left | Notification | Sound |
+|---|---|---|
+| 1 min | `Cache ending in 1m. Reply to keep your next message at $0.06; cold it costs $1.56.` plus a toast | Sosumi |
+| 15 s | `Cache ending in 15s. ...` (same text), replacing the first | none; with `alarm` set to `countdown`, `sounds/countdown.mp3` starts, a 15 s clip that ends as the cache does |
+| 0 | `Cache is cold. Your next message costs $1.56 (warm: $0.06).`, replacing it | none |
+
+A message of yours, or the next model request, stops the clip, removes the notification and starts a new period. Nothing fires mid-turn or after a compaction, and a machine that wakes past the expiry stays quiet. macOS shows each in-place update as a fresh alert; there is no quiet-update option.
+
+With [`terminal-notifier`](https://github.com/julienXX/terminal-notifier) installed (`brew install terminal-notifier`, then allow it in System Settings → Notifications), clicking the notification brings Ghostty forward and, inside herdr, runs `herdr agent focus <pane>` to select the agent that needs attention. Without it each step is a plain `osascript` banner (shown as Script Editor, no click action, no in-place update). To keep the notification on screen until dismissed, set its app (terminal-notifier or Script Editor) to **Alerts** (labelled **Persistent** on newer macOS) in System Settings → Notifications.
+
+The bundled clip is synthesized: a triangle-wave figure over a sine thump, speeding up from 110 to 170 bpm (`sounds/make_countdown.py` regenerates it). To use your own sound, set `alarmSound`. Audio plays through `afplay`, so macOS only.
 
 ### Switching position
 
@@ -49,15 +70,15 @@ Run `/plugin configure cache-gauge@brian-mods` in a session, or `claude plugin c
 
 ## Position `hint`
 
-With `position` set to `hint`, the gauge is drawn at the end of the hint line under the prompt, with no price and no bar:
+With `position` set to `hint`, the gauge is drawn at the end of the hint line under the prompt, with no bar:
 
 ```
 ● warm 4:40 · ctx 250k/367k 68%
 ```
 
-- No colour: the hint line is one string.
+- No colour unless `hintColor` is `on`; without it, the dot blinks in the last minute instead.
 - Cut where the row ends on a narrow terminal.
-- `ctx` and the cache state only; the `next msg` price is shown in `above` mode.
+- The `next msg` price shows only when the cache is cold.
 
 ## herdr
 
@@ -65,7 +86,7 @@ Inside a [herdr](https://herdr.dev) pane (`HERDR_PANE_ID` set), the gauge also r
 
 | Token | Values |
 |---|---|
-| `cache` | `warm 5m`, `warm 4.5m` … `warm 0.5m` while idle (minutes left, rounded up to the next 30 s), plain `warm` mid-turn, `cold`, or `waiting` (no reply yet, as in `◌ waiting for a reply`) |
+| `cache` | `warm 5m`, `warm 4.5m` … `warm 0.5m` while idle (minutes left, rounded up to the next 30 s), plain `warm` mid-turn, `cold`, `compacting` (while a compaction runs), `working` (while a subagent works), or `waiting` (no reply yet, as in `◌ waiting for a reply`) |
 | `ctx` | The context fill as a whole percent, a bare number such as `68`, so numeric rules (`gt`) apply |
 
 A `warm` value carries `--ttl-ms` set to the lifetime left, as a backstop: herdr deletes an expired token, and the gauge sends `cache=cold` itself when the lifetime runs out. `ctx` is sent separately, with a 24 h backstop so a crashed session's value goes eventually. Tokens go out at start, when the countdown text changes (every 30 s), after each reply, a compaction or a `/model` switch, and when the cache goes cold; an unchanged value is not sent again. Both tokens are cleared when the session ends.

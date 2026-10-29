@@ -22,6 +22,27 @@ export const OUTPUT_RATIO = 5
 export const EMA_ALPHA = 0.3
 
 export type Ttl = '5m' | '1h'
+
+const isTtl = (value: unknown): value is Ttl => value === '5m' || value === '1h'
+
+// The cache lifetime Claude Code requests, by its documented precedence. Same function as
+// cache-keepalive's (mods ship as separate folders, so it cannot be imported). It cannot see
+// the billing type, so the unset default is 5m.
+export function resolveTtl(input: {
+  override?: unknown
+  force5m?: string
+  env?: string
+  setting?: unknown
+  enable1h?: string
+}): Ttl {
+  if (isTtl(input.override)) return input.override
+  if (input.force5m === '1') return '5m'
+  if (isTtl(input.env)) return input.env
+  if (isTtl(input.setting)) return input.setting
+  if (input.enable1h === '1') return '1h'
+
+  return '5m'
+}
 export type Usage = {
   input_tokens: number
   output_tokens: number
