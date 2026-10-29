@@ -72,4 +72,4 @@ With `ttl: auto` it reads the lifetime from Claude Code's own controls, in Claud
 | `maxHours` | `4` | Hard cap on how long one idle period is kept warm |
 | `notifyEvery` | `1` | Raise a notification after every Nth ping; `0` turns them off |
 
-Read prices come from the model id: 0.025× input for Fable and Mythos, 0.05× for Opus 5.5, 0.1× for everything else.
+Read prices come from the model id: 0.025× input for Fable and Mythos, 0.05× for Opus 5.5 and Sonnet 5.5, 0.1× for everything else.

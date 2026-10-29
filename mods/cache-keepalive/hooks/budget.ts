@@ -24,6 +24,7 @@ export function readRatio(model: string | undefined): number {
 
   if (id.includes('fable') || id.includes('mythos')) return 0.025
   if (id.includes('opus-5-5') || id.includes('opus-5.5')) return 0.05
+  if (id.includes('sonnet-5-5') || id.includes('sonnet-5.5')) return 0.05
 
   return 0.1
 }

@@ -7,19 +7,19 @@ const open = { factor: 1, hardCap: 1000, maxHours: 1000, intervalPercent: 90 }
 test('readRatio_shouldFollowModelPricing_whenModelKnown', () => {
   expect(readRatio('global.anthropic.claude-fable-5-1')).toBe(0.025)
   expect(readRatio('global.anthropic.claude-opus-5-5')).toBe(0.05)
-  expect(readRatio('global.anthropic.claude-sonnet-5-5')).toBe(0.1)
+  expect(readRatio('global.anthropic.claude-sonnet-5-5')).toBe(0.05)
   expect(readRatio(undefined)).toBe(0.1)
 })
 
 test('plan_shouldReturnFiveMinuteBreakEven_whenTtlIs5m', () => {
-  expect(plan('claude-sonnet-5-5', '5m', open).limit).toBe(11)
+  expect(plan('claude-sonnet-5-5', '5m', open).limit).toBe(24)
   expect(plan('claude-opus-5-5', '5m', open).limit).toBe(24)
   expect(plan('claude-fable-5-1', '5m', open).limit).toBe(49)
   expect(plan('claude-sonnet-5-5', '5m', open).intervalMs).toBe(270_000)
 })
 
 test('plan_shouldReturnOneHourBreakEven_whenTtlIs1h', () => {
-  expect(plan('claude-sonnet-5-5', '1h', open).limit).toBe(19)
+  expect(plan('claude-sonnet-5-5', '1h', open).limit).toBe(39)
   expect(plan('claude-opus-5-5', '1h', open).limit).toBe(39)
   expect(plan('claude-sonnet-5-5', '1h', open).intervalMs).toBe(3_240_000)
 })

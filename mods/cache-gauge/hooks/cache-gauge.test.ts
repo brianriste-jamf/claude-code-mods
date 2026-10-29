@@ -29,6 +29,9 @@ test('rates pick the model family, most specific first', () => {
   expect(ratesFor('claude-fable-5-1').read).toBe(0.025)
   expect(ratesFor('claude-fable-5').read).toBe(0.1)
   near(ratesFor('claude-sonnet-5-5').input, 2e-6)
+  expect(ratesFor('us.anthropic.claude-sonnet-5-5').read).toBe(0.05)
+  expect(ratesFor('claude-sonnet-5').read).toBe(0.1)
+  near(ratesFor('claude-sonnet-4-6').input, 3e-6)
 })
 
 test('weighted units price each token kind against uncached input', () => {
