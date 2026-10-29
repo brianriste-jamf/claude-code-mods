@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, ModelUsage, Register } from 'claude-code'
 
 import type { KeepaliveView } from '../types'
 
@@ -9,24 +9,34 @@ import type { PlanOptions, Ttl } from './budget'
 const NAME = 'cache-keepalive'
 const TICK_MS = 1000
 const view = atom({ plugin: 'cache-keepalive', key: 'view' } as const, { kind: 'off' } as KeepaliveView)
-// Survives a reload, which starts the module over: idle time counts from the last reply, not the reload.
+// Survives a reload, which starts the module over: idle time counts from the cache's last use
+// (a reply or a ping), not the reload.
 const lastReply = atom({ plugin: 'cache-keepalive', key: 'lastReply' } as const, 0)
 const PING = 'Cache keep-alive ping. Reply with the single word "ok" and use no tools.'
+// How long to wait before trying again after an API error (429, 529, a dropped connection).
+const RETRY_MS = 30_000
 
 type Keepalive = {
   options: PlanOptions
   override: unknown
   isEnabled: boolean
   isBusy: boolean
+  /** A fork is in flight; the tick must not send a second one. */
+  isPinging: boolean
+  /** A ping found the cache already gone, or there was no conversation to fork yet. */
+  hasLapsed: boolean
   hasWarned: boolean
   model: string | undefined
   ttl: Ttl
   ttlSource: string
+  /** When the cache was last used: the main thread's last reply or the last ping that read it. */
   lastActivity: number
+  /** No ping before this, after an API error. */
+  retryAt: number
+  /** Counts idle periods, so a ping that returns after a message of your own is dropped. */
+  period: number
   pings: number
   notifyEvery: number
-  /** Session cost when the ping in flight was sent; null while none is. */
-  pingFromUsd: number | null
   /** What this idle period's pings have cost, from the session total. */
   spentUsd: number
 }
@@ -77,14 +87,52 @@ async function notify($: EngineInterface, k: Keepalive, text: string) {
   }
 }
 
-// After a ping's turn: add its cost, and say every `notifyEvery` pings what idling has cost.
-async function settlePing($: EngineInterface, k: Keepalive) {
-  const from = k.pingFromUsd
-  k.pingFromUsd = null
-  const to = await sessionUsd($)
-  if (from !== null && to !== null && to > from) {
-    k.spentUsd += to - from
+// A fork read the prefix from cache only if the cache served most of it; near zero, the entry had lapsed.
+const isCacheHit = (u: ModelUsage) => u.cache_read_input_tokens > 0 && u.cache_read_input_tokens >= u.input_tokens + u.cache_creation_input_tokens
+
+// One ping: a fork over the main thread's last request reads its prefix from cache, which
+// restarts the cache's lifetime, and adds nothing to the transcript. A ping turn would stay
+// in the conversation for good, and with it every later request.
+async function ping($: EngineInterface, k: Keepalive) {
+  // Set before the first await: the next tick must not start a second fork.
+  k.isPinging = true
+  k.pings += 1
+  const period = k.period
+
+  try {
+    const fromUsd = await sessionUsd($)
+    const r = await $.model.fork({ prompt: PING })
+    if (k.period !== period) {
+      return
+    }
+    const toUsd = await sessionUsd($)
+    if (fromUsd !== null && toUsd !== null && toUsd > fromUsd) {
+      k.spentUsd += toUsd - fromUsd
+    }
+
+    if (!r.isAnswered && (r.reason === 'api-error' || r.reason === 'aborted')) {
+      k.pings -= 1
+      k.retryAt = (await $.clock.now()) + RETRY_MS
+    } else if (!('usage' in r) || !isCacheHit(r.usage)) {
+      // Nothing cached to keep warm (nothing to fork yet, or the entry had lapsed):
+      // wait for the next reply instead of paying for the prefix again.
+      k.hasLapsed = true
+    } else {
+      k.lastActivity = await $.clock.now()
+      await update($, lastReply, () => k.lastActivity)
+      await settlePing($, k)
+    }
+  } catch {
+    // The engine refused to send it: try again later rather than on every tick.
+    k.pings -= 1
+    k.retryAt = (await $.clock.now()) + RETRY_MS
+  } finally {
+    k.isPinging = false
   }
+}
+
+// After a ping: say every `notifyEvery` pings what idling has cost.
+async function settlePing($: EngineInterface, k: Keepalive) {
   if (k.notifyEvery <= 0 || k.pings % k.notifyEvery !== 0) {
     return
   }
@@ -109,14 +157,19 @@ async function step($: EngineInterface, k: Keepalive) {
 
   const p = plan(k.model, k.ttl, k.options)
   const counts = { pings: k.pings, limit: p.limit, spentUsd: k.spentUsd }
-  const idle = (await $.clock.now()) - k.lastActivity
+  const now = await $.clock.now()
+  const idle = now - k.lastActivity
 
   if (k.isBusy) {
     await show($, { kind: 'busy', ...counts })
     return
   }
 
-  if (idle >= p.ttlMs) {
+  if (k.isPinging) {
+    return
+  }
+
+  if (k.hasLapsed || idle >= p.ttlMs) {
     await show($, { kind: 'cold', ...counts })
     return
   }
@@ -132,22 +185,12 @@ async function step($: EngineInterface, k: Keepalive) {
     return
   }
 
-  if (idle >= p.intervalMs) {
-    k.pings += 1
-    k.isBusy = true
-    k.pingFromUsd = await sessionUsd($)
-
-    try {
-      await $.prompt.submit({ text: PING })
-    } catch {
-      k.isBusy = false
-      k.pingFromUsd = null
-    }
-
+  if (idle >= p.intervalMs && now >= k.retryAt) {
+    await ping($, k)
     return
   }
 
-  const nextPingMs = p.intervalMs - idle
+  const nextPingMs = Math.max(p.intervalMs - idle, k.retryAt - now)
   // The last ping still leaves the cache warm for a full lifetime after it.
   const warmForMs = nextPingMs + (p.limit - k.pings - 1) * p.intervalMs + p.ttlMs
 
@@ -165,14 +208,17 @@ export const register: Register = (on, options) => {
     override: options.ttl,
     isEnabled: options.autoStart === true,
     isBusy: false,
+    isPinging: false,
+    hasLapsed: false,
     hasWarned: false,
     model: undefined,
     ttl: '5m',
     ttlSource: 'default (assumed)',
     lastActivity: 0,
+    retryAt: 0,
+    period: 0,
     pings: 0,
     notifyEvery: Math.max(0, Math.floor(number(options.notifyEvery, 1))),
-    pingFromUsd: null,
     spentUsd: 0,
   }
 
@@ -208,26 +254,22 @@ export const register: Register = (on, options) => {
     // A subagent's turn says nothing about the main conversation's cache.
     if (e.agentId === undefined) {
       k.isBusy = false
+      k.hasLapsed = false
       k.lastActivity = await $.clock.now()
       await update($, lastReply, () => k.lastActivity)
       k.model = e.usage?.model ?? k.model
     }
-    const result = await next(e)
-    if (e.agentId === undefined && k.pingFromUsd !== null) {
-      await settlePing($, k)
-    }
 
-    return result
+    return next(e)
   })
 
+  // Pings are forks and submit nothing, so every prompt starts a new idle period.
   on('prompt.submit', ($, e, next) => {
-    const isOwnPing = e.origin.kind === 'plugin' && e.origin.name === NAME
-
-    if (!isOwnPing) {
-      k.pings = 0
-      k.spentUsd = 0
-      k.hasWarned = false
-    }
+    k.period += 1
+    k.pings = 0
+    k.spentUsd = 0
+    k.hasWarned = false
+    k.retryAt = 0
 
     return next(e)
   })
@@ -238,9 +280,12 @@ export const register: Register = (on, options) => {
     if (arg === 'on') {
       await refreshTtl($, k)
       k.isEnabled = true
+      k.period += 1
       k.pings = 0
       k.spentUsd = 0
       k.hasWarned = false
+      k.hasLapsed = false
+      k.retryAt = 0
       await step($, k)
 
       const p = plan(k.model, k.ttl, k.options)
