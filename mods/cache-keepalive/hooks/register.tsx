@@ -12,6 +12,8 @@ const view = atom({ plugin: 'cache-keepalive', key: 'view' } as const, { kind: '
 // Survives a reload, which starts the module over: idle time counts from the cache's last use
 // (a reply or a ping), not the reload.
 const lastReply = atom({ plugin: 'cache-keepalive', key: 'lastReply' } as const, 0)
+// When the last successful ping's request started (0 for none); cache-gauge reads it.
+const lastPingAt = atom({ plugin: 'cache-keepalive', key: 'lastPingAt' } as const, 0)
 const PING = 'Cache keep-alive ping. Reply with the single word "ok" and use no tools.'
 // How long to wait before trying again after an API error (429, 529, a dropped connection).
 const RETRY_MS = 30_000
@@ -101,6 +103,7 @@ async function ping($: EngineInterface, k: Keepalive) {
 
   try {
     const fromUsd = await sessionUsd($)
+    const startedAt = await $.clock.now()
     const r = await $.model.fork({ prompt: PING })
     if (k.period !== period) {
       return
@@ -120,6 +123,7 @@ async function ping($: EngineInterface, k: Keepalive) {
     } else {
       k.lastActivity = await $.clock.now()
       await update($, lastReply, () => k.lastActivity)
+      await update($, lastPingAt, () => startedAt)
       await settlePing($, k)
     }
   } catch {

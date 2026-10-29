@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, On, Register } from 'claude-code'
+import type { Atom, EngineInterface, On, Register } from 'claude-code'
 
 import type { Snapshot } from '../types'
 import {
@@ -23,6 +23,9 @@ import { createHerdr } from './herdr'
 
 const PLUGIN = 'cache-gauge'
 const snapshot = atom({ plugin: 'cache-gauge', key: 'snapshot' } as const, null)
+// Owned by cache-keepalive: when its last successful fork ping's request started; 0 for none. Read-only here, and cast
+// because this mod's types do not declare another mod's state.
+const pingedAt = atom({ plugin: 'cache-keepalive', key: 'lastPingAt' } as never, 0) as unknown as Atom<number>
 const isHidden = atom({ plugin: 'cache-gauge', key: 'isHidden' } as const, false)
 const now = atom({ plugin: 'cache-gauge', key: 'now' } as const, 0)
 // True while a main-conversation compaction runs; flipping it is what redraws the line, since the tick stops once it has drawn cold.
@@ -50,7 +53,7 @@ async function resolveFrom($: EngineInterface, override: unknown): Promise<Ttl> 
 // `t` is the time the caller already holds; without it the clock is read.
 async function sync($: EngineInterface, herdr: Herdr, t?: number) {
   if (herdr.isOn) {
-    herdr.report(await read($, snapshot), t ?? (await $.clock.now()))
+    herdr.report(await read($, snapshot), t ?? (await $.clock.now()), await read($, pingedAt))
   }
 }
 
@@ -64,7 +67,7 @@ const onAbovePrompt = (on: On, getTtl: () => Ttl) => {
     const { Box, Text } = $.ui.resolve(e)
 
     const ttl = getTtl()
-    const { limit, ctx, leftMs, isWarm } = gaugeState(snap, ttl, await read($, now))
+    const { limit, ctx, leftMs, isWarm } = gaugeState(snap, ttl, await read($, now), await read($, pingedAt))
     const ctxPart = ` · ctx ${tokens(snap.ctxTokens)}/${tokens(limit)} `
 
     let state
@@ -125,7 +128,7 @@ const onPromptHint = (on: On, getTtl: () => Ttl, isColored: boolean) => {
     }
 
     const ttl = getTtl()
-    const { limit, ctx, leftMs, isWarm } = gaugeState(snap, ttl, await read($, now))
+    const { limit, ctx, leftMs, isWarm } = gaugeState(snap, ttl, await read($, now), await read($, pingedAt))
     const isEnding = isWarm && leftMs <= 60_000
     const busy = (await read($, isCompacting)) ? '◌ compacting' : (await read($, isAgentsBusy)) ? '◌ agent working' : null
     let state = '◌ waiting'
@@ -247,10 +250,22 @@ export const register: Register = (on, options) => {
     // Ticks until the band has drawn the cache cold. Not a time window: a machine
     // that sleeps through the expiry wakes to a first tick long past it.
     $.clock.every(1000, () => {
-      if (drawnAt > warmUntil && !isAgentsNow) {
-        return
+      void foldPing().then(() => {
+        if (drawnAt > warmUntil && !isAgentsNow) {
+          return
+        }
+        void tick()
+      })
+    })
+    const foldPing = async () => {
+      const p = await read($, pingedAt)
+      const snap = p > 0 ? await read($, snapshot) : null
+      if (snap !== null && snap.respondedAt !== null && !snap.isCompacted && p > snap.respondedAt && isSameModel(snap.currentModel ?? snap.model, snap.model)) {
+        warmUntil = Math.max(warmUntil, p + ttlMs(ttl))
       }
-      void $.clock.now().then(async t => {
+    }
+    const tick = () =>
+      $.clock.now().then(async t => {
         drawnAt = t
         if (sweepAgents(t)) {
           await update($, isAgentsBusy, () => isAgentsNow)
@@ -304,7 +319,6 @@ export const register: Register = (on, options) => {
           prices,
         )
       })
-    })
 
     return next(e)
   })
