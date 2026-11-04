@@ -20,6 +20,8 @@ import {
 import type { Ttl } from './pricing'
 import { alarmMode, createAlarm } from './alarm'
 import { createHerdr } from './herdr'
+import { createHerdrApp } from './herdr-app'
+import type { AppIo } from './herdr-app'
 
 const PLUGIN = 'cache-gauge'
 const snapshot = atom({ plugin: 'cache-gauge', key: 'snapshot' } as const, null)
@@ -36,6 +38,27 @@ const isAgentsBusy = atom({ plugin: 'cache-gauge', key: 'isAgentsBusy' } as cons
 const AGENT_STALE_MS = 600_000
 
 type Herdr = ReturnType<typeof createHerdr>
+type HerdrApp = ReturnType<typeof createHerdrApp>
+// The two reporters of the same state: the herdr sidebar's pane metadata and the Herdr app's state file.
+type Reporters = { herdr: Herdr; app: HerdrApp }
+
+// The module has no Node: the file system is `$.fs` for text, and `mv`, `rm` and `mkdir` (argv, no shell) for what it lacks.
+const appIo = ($: EngineInterface): AppIo => {
+  const run = async (argv: string[]) => {
+    const { exitCode } = await $.process.run(argv)
+    if (exitCode !== 0) {
+      throw new Error(`${argv[0]} exited ${exitCode}`)
+    }
+  }
+
+  return {
+    env: name => (name === 'HOME' ? $.env.get('HOME') : $.env.get('HC_TERMINAL_ID')),
+    mkdir: dir => run(['mkdir', '-p', '-m', '700', dir]),
+    write: (path, text) => $.fs.write(path, text),
+    rename: (from, to) => run(['mv', '-f', from, to]),
+    remove: path => run(['rm', '-f', path]),
+  }
+}
 
 // Re-read where Claude Code takes the cache lifetime from; the mod option overrides it when set to 5m or 1h ('auto' defers).
 async function resolveFrom($: EngineInterface, override: unknown): Promise<Ttl> {
@@ -51,9 +74,12 @@ async function resolveFrom($: EngineInterface, override: unknown): Promise<Ttl> 
 }
 
 // `t` is the time the caller already holds; without it the clock is read.
-async function sync($: EngineInterface, herdr: Herdr, t?: number) {
-  if (herdr.isOn) {
-    herdr.report(await read($, snapshot), t ?? (await $.clock.now()), await read($, pingedAt))
+async function sync($: EngineInterface, { herdr, app }: Reporters, t?: number) {
+  if (herdr.isOn || app.isOn) {
+    const snap = await read($, snapshot)
+    const at = t ?? (await $.clock.now())
+    herdr.report(snap, at, await read($, pingedAt))
+    app.report(snap, at)
   }
 }
 
@@ -184,6 +210,8 @@ export const register: Register = (on, options) => {
   let warmUntil = 0
   let drawnAt = 0
   const herdr = createHerdr(getTtl)
+  const app = createHerdrApp(getTtl)
+  const reporters: Reporters = { herdr, app }
   const alarm = createAlarm(alarmMode(options.alarm), typeof options.alarmSound === 'string' ? options.alarmSound.trim() : '')
   // Set by the first model request of a turn, cleared when the turn completes.
   let isTurnActive = false
@@ -239,6 +267,7 @@ export const register: Register = (on, options) => {
       warmUntil = held.respondedAt + ttlMs(ttl)
     }
     await herdr.detect(argv => $.process.run(argv))
+    await app.detect(appIo($), await $.session.id().catch(() => ''))
     // A fresh or reloaded session may hold no model in its usage yet; the session knows it.
     if (herdr.isOn) {
       const model = await $.session.model().catch(() => null)
@@ -246,7 +275,7 @@ export const register: Register = (on, options) => {
         herdr.showModel(model)
       }
     }
-    await sync($, herdr)
+    await sync($, reporters)
     // Ticks until the band has drawn the cache cold. Not a time window: a machine
     // that sleeps through the expiry wakes to a first tick long past it.
     $.clock.every(1000, () => {
@@ -271,7 +300,7 @@ export const register: Register = (on, options) => {
           await update($, isAgentsBusy, () => isAgentsNow)
         }
         await update($, now, () => t)
-        await sync($, herdr, t)
+        await sync($, reporters, t)
         const snap = await read($, snapshot)
         const cost = snap === null ? null : nextCost(snap.ctxTokens, snap.baseUsd, snap.currentModel ?? snap.model, ttl)
         const mark = snap?.isCalibrated ? '' : '~'
@@ -357,7 +386,7 @@ export const register: Register = (on, options) => {
       activeAgents.delete(e.agentId)
       if (sweepAgents(await $.clock.now())) {
         await update($, isAgentsBusy, () => isAgentsNow)
-        await sync($, herdr)
+        await sync($, reporters)
       }
 
       return result
@@ -401,7 +430,7 @@ export const register: Register = (on, options) => {
     await update($, snapshot, () => fresh)
     drawnAt = completedAt
     await update($, now, () => completedAt)
-    await sync($, herdr, completedAt)
+    await sync($, reporters, completedAt)
 
     return result
   })
@@ -432,7 +461,7 @@ export const register: Register = (on, options) => {
       activeAgents.set(e.agentId, t)
       if (sweepAgents(t)) {
         await update($, isAgentsBusy, () => true)
-        await sync($, herdr, t)
+        await sync($, reporters, t)
       }
     }
     // The API measures the lifetime from the start of the request, so a long response counts against it.
@@ -451,7 +480,7 @@ export const register: Register = (on, options) => {
       }
       drawnAt = startedAt
       await update($, now, () => startedAt)
-      await sync($, herdr, startedAt)
+      await sync($, reporters, startedAt)
     }
     const result = yield* next(e)
     if (e.agentId !== undefined) {
@@ -475,7 +504,7 @@ export const register: Register = (on, options) => {
         baseUsd: base ?? ratesFor(model).input,
         isCalibrated: base !== null,
       }))
-      await sync($, herdr)
+      await sync($, reporters)
     }
 
     return result
@@ -492,6 +521,7 @@ export const register: Register = (on, options) => {
   on('session.end', async ($, e, next) => {
     alarm.reset()
     await herdr.clear()
+    await app.clear()
 
     return next(e)
   })
@@ -505,7 +535,7 @@ export const register: Register = (on, options) => {
     herdr.setCompacting(true)
     await update($, isCompacting, () => true)
     alarm.reset()
-    await sync($, herdr)
+    await sync($, reporters)
     try {
       const result = await next(e)
       if (result.skip !== undefined) {
@@ -530,7 +560,7 @@ export const register: Register = (on, options) => {
       isCompactingNow = false
       herdr.setCompacting(false)
       await update($, isCompacting, () => false)
-      await sync($, herdr)
+      await sync($, reporters)
     }
   })
 
@@ -551,7 +581,7 @@ export const register: Register = (on, options) => {
         baseUsd: base ?? ratesFor(current).input,
         isCalibrated: base !== null,
       }))
-      await sync($, herdr)
+      await sync($, reporters)
     }
 
     return result
