@@ -104,6 +104,16 @@ rows = [
 ]
 ```
 
+## Herdr app
+
+In a terminal started by `hc` (`HC_TERMINAL_ID` matches `t1` or `mac/t7`), the gauge also writes `~/.cache/cache-gauge/herdr-app/<id>.json` (`/` becomes `_` in the file name; directory mode 0700). It works alongside the herdr reporter above and does nothing outside `hc`.
+
+```json
+{"v":1,"terminal":"mac/t7","session_id":"…","model":"claude-opus-5-5","model_short":"opus 5.5","last_assistant_ms":1730000000000,"ttl_s":300,"updated_ms":1730000001000}
+```
+
+`last_assistant_ms` is `0` before the first reply; `ttl_s` is `300` or `3600`. It is written at start and when the model, a reply or the TTL changes (an unchanged value is not rewritten), through a temp file and a rename, and deleted when the session ends. A crashed session leaves its file: the reader ignores one whose `updated_ms` is over 24 h old. Writing runs `mkdir`, `mv` and `rm` by argv (no shell): the mod API has no rename or delete.
+
 ## How the cost is estimated
 
 The estimate starts from list prices per model family (Opus, Sonnet, Haiku, Fable), then calibrates against what the session really pays: after each reply it divides the session's cost increase by that reply's tokens, weighted by kind (cache read, cache write, uncached input, output), and keeps a moving average. Until the first usable sample the price carries a `~`. This makes the figure right on Bedrock or enterprise pricing, where list prices do not apply. Replies that ran a subagent are skipped as samples, since the subagent's cost lands in the session total but not in the reply's own tokens.
