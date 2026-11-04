@@ -16,7 +16,11 @@ export type AppIo = {
   rename: (from: string, to: string) => Promise<void>
   /** Removes the file; a missing file is not an error. */
   remove: (path: string) => Promise<void>
+  /** The absolute path of an executable on PATH, or undefined when it is not found. */
+  which: (name: 'herdr-app') => Promise<string | undefined>
 }
+
+const quote = (v: string) => `'${v.replaceAll("'", "'\\''")}'`
 
 /**
  * Writes the model and cache warmth to `~/.cache/cache-gauge/herdr-app/<terminal>.json` for the Herdr app mod, when the
@@ -28,6 +32,7 @@ export const createHerdrApp = (getTtl: () => Ttl) => {
   let sessionId = ''
   let dir = ''
   let isDirMade = false
+  let bin = ''
   // The last payload written, without its timestamp.
   let sent: string | null = null
   // One operation at a time, so a write and the delete at the end land in order.
@@ -43,11 +48,20 @@ export const createHerdrApp = (getTtl: () => Ttl) => {
       return terminal !== ''
     },
 
+    /**
+     * A shell command for a notification click that focuses this terminal's agent in the Herdr app, usable from a bare
+     * environment (absolute path, every value quoted); empty when the reporter is off or herdr-app was not found.
+     */
+    get focusCommand() {
+      return terminal !== '' && bin.startsWith('/') ? `${quote(bin)} do agent.focus --terminal ${quote(terminal)}` : ''
+    },
+
     /** Reads the environment; the reporter stays off unless HC_TERMINAL_ID is a valid terminal id and HOME is known. */
     async detect(fileIo: AppIo, id: string) {
       io = fileIo
       sessionId = id
       terminal = ''
+      bin = ''
       isDirMade = false
       sent = null
       try {
@@ -59,6 +73,13 @@ export const createHerdrApp = (getTtl: () => Ttl) => {
         }
       } catch {
         terminal = ''
+      }
+      if (terminal !== '') {
+        try {
+          bin = ((await io.which('herdr-app')) ?? '').trim()
+        } catch {
+          bin = ''
+        }
       }
     },
 
