@@ -4,6 +4,7 @@ import type { On } from 'claude-code'
 import type { Snapshot } from '../types'
 import { createHerdrApp } from './herdr-app'
 import type { AppIo } from './herdr-app'
+import { HERDR_APP_BUNDLE_ID } from './register'
 
 const HOME = '/home/u'
 const DIR = `${HOME}/.cache/cache-gauge/herdr-app`
@@ -22,7 +23,12 @@ const snap = (patch: Partial<Snapshot> = {}): Snapshot => ({
 })
 
 // An in-memory file system that records every operation in order.
-const fake = (env: Record<string, string | undefined>, fails: Partial<Record<'mkdir' | 'write' | 'rename' | 'remove', boolean>> = {}) => {
+const BIN = '/home/u/.local/bin/herdr-app'
+const fake = (
+  env: Record<string, string | undefined>,
+  fails: Partial<Record<'mkdir' | 'write' | 'rename' | 'remove', boolean>> = {},
+  bin: string | undefined = BIN,
+) => {
   const files = new Map<string, string>()
   const ops: string[] = []
   const check = (op: keyof typeof fails) => {
@@ -52,6 +58,7 @@ const fake = (env: Record<string, string | undefined>, fails: Partial<Record<'mk
       ops.push(`remove ${path}`)
       files.delete(path)
     },
+    which: async () => bin,
   }
 
   return { io, files, ops }
@@ -256,6 +263,47 @@ test('an environment that throws leaves the reporter off', async () => {
   expect([app.isOn, f.ops]).toEqual([false, []])
 })
 
+const focusOf = async (env: Record<string, string | undefined>, bin?: string) => {
+  const f = fake(env, {}, bin)
+  const app = createHerdrApp(() => '5m')
+  await app.detect(f.io, 's1')
+
+  return app.focusCommand
+}
+
+test('the focus command is empty when the reporter is off or herdr-app has no absolute path', async () => {
+  expect(await focusOf({ HOME })).toBe('')
+  expect(await focusOf({ HC_TERMINAL_ID: 't1; x', HOME })).toBe('')
+  for (const bin of ['', '  ', 'herdr-app', 'bin/herdr-app']) {
+    expect([bin, await focusOf(ON, bin)]).toEqual([bin, ''])
+  }
+  const f = fake(ON)
+  for (const which of [async () => undefined, async () => Promise.reject(new Error('no sh'))]) {
+    const app = createHerdrApp(() => '5m')
+    await app.detect({ ...f.io, which }, 's1')
+    expect([app.isOn, app.focusCommand]).toEqual([true, ''])
+  }
+})
+
+test('the focus command is the quoted herdr-app path and terminal id', async () => {
+  expect(await focusOf({ HC_TERMINAL_ID: 't7', HOME })).toBe(`'${BIN}' do agent.focus --terminal 't7'`)
+  expect(await focusOf({ HC_TERMINAL_ID: 'mac/t7', HOME })).toBe(`'${BIN}' do agent.focus --terminal 'mac/t7'`)
+})
+
+test('a path with a space and a single quote stays one quoted word', async () => {
+  expect(await focusOf(ON, "/Users/o'brien/My Apps/herdr-app")).toBe(
+    "'/Users/o'\\''brien/My Apps/herdr-app' do agent.focus --terminal 't1'",
+  )
+})
+
+test('a new detect forgets the earlier path', async () => {
+  const f = fake(ON)
+  const app = createHerdrApp(() => '5m')
+  await app.detect(f.io, 's1')
+  await app.detect(fake({ HOME }).io, 's1')
+  expect(app.focusCommand).toBe('')
+})
+
 // The mod end to end: the engine beneath answers env, fs and process.run, and the gauge's own hooks drive the reporter.
 const OPUS_ID = 'claude-opus-5-5'
 const TURN_USAGE = {
@@ -265,7 +313,7 @@ const TURN_USAGE = {
   cache_creation_input_tokens: 9000,
   model: OPUS_ID,
 }
-const wire = (on: On, env: Record<string, string>) => {
+const wire = (on: On, env: Record<string, string>, answer: (argv: string[]) => string = () => '') => {
   const clock = mock.clock(on)
   const writes: { path: string; text: string }[] = []
   const commands: string[][] = []
@@ -288,7 +336,7 @@ const wire = (on: On, env: Record<string, string>) => {
   on('process.run', (_$, e) => {
     commands.push([...e.argv])
 
-    return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
+    return { value: { exitCode: 0, stdout: answer([...e.argv]), stderr: '' } } as never
   })
 
   return { clock, writes, commands }
@@ -325,4 +373,52 @@ test('outside an hc terminal the mod touches neither the file system nor mv and 
   await settle()
 
   expect([writes, commands.filter(c => c[0] !== 'sh')]).toEqual([[], []])
+})
+
+// The notification the alarm raises 275 s after a reply, as the argv terminal-notifier receives it after `-group`.
+const clickOf = async ($: Parameters<Parameters<typeof test>[1]>[0], on: On, env: Record<string, string>, answer: (argv: string[]) => string) => {
+  const { clock, commands } = wire(on, env, answer)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  await clock.advance(275_000)
+  await settle()
+  const notice = commands.find(argv => argv[0] === 'terminal-notifier' && !argv.includes('-remove'))
+
+  return notice === undefined ? undefined : notice.slice(notice.indexOf('-group') + 2)
+}
+const script = (argv: string[]) => argv[2] ?? ''
+const NO_PANE = (argv: string[]) => (script(argv) === 'command -v herdr-app' ? BIN : '')
+const IN_PANE = (argv: string[]) => {
+  if (script(argv) === 'command -v herdr-app') {
+    return BIN
+  }
+
+  return script(argv).includes('HERDR_SOCKET_PATH') ? '/tmp/h.sock\n/opt/homebrew/bin/herdr' : 'w4:p1'
+}
+
+test('in an hc terminal without HERDR_PANE_ID the notification click focuses the agent in the Herdr app', async ($, on) => {
+  expect(HERDR_APP_BUNDLE_ID).toBe('dev.herdr.app')
+  expect(await clickOf($, on, { HC_TERMINAL_ID: 't7', HOME }, NO_PANE)).toEqual([
+    '-activate',
+    'dev.herdr.app',
+    '-execute',
+    `'${BIN}' do agent.focus --terminal 't7'`,
+  ])
+})
+
+test('in an hc terminal with a herdr pane the click is still the Ghostty and herdr command', async ($, on) => {
+  expect(await clickOf($, on, { HC_TERMINAL_ID: 't7', HOME }, IN_PANE)).toEqual([
+    '-activate',
+    'com.mitchellh.ghostty',
+    '-execute',
+    "HERDR_SOCKET_PATH='/tmp/h.sock' '/opt/homebrew/bin/herdr' agent focus 'w4:p1'",
+  ])
+})
+
+test('outside hc the notification has no click', async ($, on) => {
+  expect(await clickOf($, on, { HOME }, NO_PANE)).toEqual([])
+})
+
+test('in an hc terminal where herdr-app is not found the notification has no click', async ($, on) => {
+  expect(await clickOf($, on, { HC_TERMINAL_ID: 't7', HOME }, () => '')).toEqual([])
 })

@@ -24,6 +24,9 @@ import { createHerdrApp } from './herdr-app'
 import type { AppIo } from './herdr-app'
 
 const PLUGIN = 'cache-gauge'
+// What a notification click brings forward before it runs the focus command.
+export const HERDR_APP_BUNDLE_ID = 'dev.herdr.app'
+const GHOSTTY_BUNDLE_ID = 'com.mitchellh.ghostty'
 const snapshot = atom({ plugin: 'cache-gauge', key: 'snapshot' } as const, null)
 // Owned by cache-keepalive: when its last successful fork ping's request started; 0 for none. Read-only here, and cast
 // because this mod's types do not declare another mod's state.
@@ -57,6 +60,11 @@ const appIo = ($: EngineInterface): AppIo => {
     write: (path, text) => $.fs.write(path, text),
     rename: (from, to) => run(['mv', '-f', from, to]),
     remove: path => run(['rm', '-f', path]),
+    which: async () => {
+      const { exitCode, stdout } = await $.process.run(['sh', '-c', 'command -v herdr-app'])
+
+      return exitCode === 0 ? stdout.trim() : undefined
+    },
   }
 }
 
@@ -314,8 +322,14 @@ export const register: Register = (on, options) => {
               // $.ui.notify and herdr's toast never reached the user inside herdr; Notification Center does.
               // terminal-notifier's click returns to this agent, and its group replaces the earlier message in place;
               // without it (or if it fails) a plain banner.
+              // In an hc terminal of the Herdr app the click focuses the agent there; the old herdr takes precedence.
               const focus = herdr.focusCommand
-              const click = focus === '' ? [] : ['-activate', 'com.mitchellh.ghostty', '-execute', focus]
+              const click =
+                focus !== ''
+                  ? ['-activate', GHOSTTY_BUNDLE_ID, '-execute', focus]
+                  : app.focusCommand !== ''
+                    ? ['-activate', HERDR_APP_BUNDLE_ID, '-execute', app.focusCommand]
+                    : []
               const sound = isFirst ? ['-sound', 'Sosumi'] : []
               // The body goes in as an argument, never spliced into the script, so a quote in it cannot break out.
               const banner = () =>
