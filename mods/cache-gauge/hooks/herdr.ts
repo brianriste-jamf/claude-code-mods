@@ -119,11 +119,11 @@ export const createHerdr = (getTtl: () => Ttl) => {
     },
 
     /** Sends what changed since the last report. */
-    report(snap: Snapshot | null, t: number) {
+    report(snap: Snapshot | null, t: number, pingedAt = 0) {
       if (paneId === '' || snap === null) {
         return
       }
-      const { ctx, leftMs, isWarm } = gaugeState(snap, getTtl(), t)
+      const { ctx, leftMs, isWarm } = gaugeState(snap, getTtl(), t, pingedAt)
       showModel(snap.currentModel ?? snap.model)
       // The countdown steps every 30 s, rounded up, in minutes: `warm 5m`, `warm 4.5m` ... `warm 0.5m`.
       const warm = isWorking ? 'warm' : `warm ${(Math.ceil(leftMs / STEP_MS) * STEP_MS) / 60_000}m`
@@ -131,7 +131,7 @@ export const createHerdr = (getTtl: () => Ttl) => {
       const cache = hold ?? (snap.respondedAt === null ? 'waiting' : isWarm ? warm : 'cold')
       // A reply restarts the lifetime, so it sends again even when the text is the same: the TTL needs the refresh.
       const isTimed = isWarm && hold === null
-      const cacheKey = isTimed ? `${cache}@${snap.respondedAt}` : cache
+      const cacheKey = isTimed ? `${cache}@${Math.max(snap.respondedAt ?? 0, pingedAt)}` : cache
       if (cacheKey !== sentCache) {
         sentCache = cacheKey
         send(`cache=${cache}`, hold !== null ? HOLD_TTL_MS : isTimed ? Math.ceil(leftMs) : undefined)

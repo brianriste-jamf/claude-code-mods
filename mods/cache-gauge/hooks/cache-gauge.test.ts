@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 
 import { alarmMode, alarmPhase, coldText, endingText } from './alarm'
 import { shortModel } from './herdr'
-import { bar, calibrate, level, nextCost, ratesFor, usd, weightedUnits } from './pricing'
+import { bar, calibrate, gaugeState, level, nextCost, ratesFor, usd, weightedUnits } from './pricing'
 
 const OPUS = 'claude-opus-5-5'
 const near = (actual: number | null, expected: number) =>
@@ -1606,4 +1606,41 @@ test('the fallback banner passes the message to osascript as an argument, not in
   expect(message).toContain('Cache ending in 1m.')
   expect(argv.slice(0, -1).some(arg => arg.includes(message))).toBe(false)
   expect(argv).toContain('on run argv')
+})
+
+const MIN = 60_000
+const baseSnap = {
+  ctxTokens: 1000,
+  window: 200_000,
+  compactAt: null,
+  respondedAt: 0 as number | null,
+  isCompacted: false,
+  model: 'claude-sonnet-4-5',
+  currentModel: 'claude-sonnet-4-5',
+  baseUsd: 3,
+  isCalibrated: true,
+}
+
+test('a fork ping 1 min ago keeps a cache last answered 6 min ago warm', () => {
+  const t = 10 * MIN
+  const s = gaugeState({ ...baseSnap, respondedAt: t - 6 * MIN }, '5m', t, t - 1 * MIN)
+  expect(s.isWarm).toBe(true)
+  expect(s.leftMs).toBe(4 * MIN)
+})
+
+test('an older or missing ping leaves the reply time in charge', () => {
+  const t = 10 * MIN
+  const snap = { ...baseSnap, respondedAt: t - 1 * MIN }
+  for (const ping of [0, t - 3 * MIN]) {
+    const s = gaugeState(snap, '5m', t, ping)
+    expect(s.isWarm).toBe(true)
+    expect(s.leftMs).toBe(4 * MIN)
+  }
+  expect(gaugeState(snap, '5m', t).leftMs).toBe(4 * MIN)
+})
+
+test('a ping does not warm a compacted cache', () => {
+  const t = 10 * MIN
+  const s = gaugeState({ ...baseSnap, respondedAt: t - 6 * MIN, isCompacted: true }, '5m', t, t - 1 * MIN)
+  expect(s.isWarm).toBe(false)
 })

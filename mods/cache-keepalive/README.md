@@ -8,7 +8,7 @@ While armed, it watches how long the session has been idle. Shortly before the c
 Cache keep-alive ping. Reply with the single word "ok" and use no tools.
 ```
 
-That ping is a real turn in the transcript. It costs a cache read of the context plus a one-word reply, and it restarts the cache's lifetime. Off by default.
+The ping is a fork (`$.model.fork`): the main thread's last request again, with the ping after it. The cache serves that request's prefix, which restarts the cache's lifetime, and the ping and its reply never enter the transcript, so pinging adds nothing to the context, however long you stay away. It costs a cache read of the context plus a one-word reply. Off by default.
 
 ## Commands
 
@@ -48,7 +48,9 @@ Pinging forever would cost more than letting the cache go cold once. So each idl
 2. **`maxPings`**, a hard cap.
 3. **`maxHours`**, the longest an idle period is kept warm. This matters for a 1-hour cache, where break-even alone would allow almost a day.
 
-When the budget runs out it notifies you once and lets the cache lapse. Any message of your own starts a new idle period with a fresh budget. Its own pings do not. Subagent turns are ignored, since they say nothing about the main conversation's cache. After the machine sleeps past the expiry it sees the cache is already cold and sends nothing.
+When the budget runs out it notifies you once and lets the cache lapse. Any message of your own starts a new idle period with a fresh budget. Subagent turns are ignored, since they say nothing about the main conversation's cache. After the machine sleeps past the expiry it sees the cache is already cold and sends nothing.
+
+It also stops when a ping shows the cache was already gone: the fork reports how much of the prefix the cache served, and when that is near zero (the entry lapsed early, or `/model` changed the model) pinging again would only pay for the whole context each time. It waits for your next reply instead. An API error (a 429, an overload) does not use up a ping; it tries again 30 seconds later.
 
 ## Cache lifetime
 

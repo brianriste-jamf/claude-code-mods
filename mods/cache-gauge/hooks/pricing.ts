@@ -120,14 +120,18 @@ export const countdown = (ms: number): string => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
-/** What the gauge shows at time `t`: the cache's lifetime left, whether it is warm, and the context's fill. */
-export const gaugeState = (snap: Snapshot, ttl: Ttl, t: number) => {
+/**
+ * What the gauge shows at time `t`: the cache's lifetime left, whether it is warm, and the context's fill.
+ * `pingedAt` is when a fork ping last read the cache (0 for none); the cache was last used at the later of that and the reply.
+ */
+export const gaugeState = (snap: Snapshot, ttl: Ttl, t: number, pingedAt = 0) => {
   // Fill toward where compaction runs (/autocompact moves it), else the model's window.
   const limit = snap.compactAt ?? snap.window
   const ctx = limit > 0 ? snap.ctxTokens / limit : 0
-  const leftMs = snap.respondedAt === null ? 0 : snap.respondedAt + ttlMs(ttl) - Math.max(t, snap.respondedAt)
+  const usedAt = snap.respondedAt === null ? null : Math.max(snap.respondedAt, pingedAt)
+  const leftMs = usedAt === null ? 0 : usedAt + ttlMs(ttl) - Math.max(t, usedAt)
   const isWarm =
-    snap.respondedAt !== null &&
+    usedAt !== null &&
     !snap.isCompacted &&
     isSameModel(snap.currentModel ?? snap.model, snap.model) &&
     leftMs > 0

@@ -54,7 +54,7 @@ Both mods have options (see each mod's README). Set them with `/plugin configure
 `cache-gauge` shows the countdown; `cache-keepalive` acts on it. A typical setup:
 
 1. Leave `cache-gauge` on all the time.
-2. Before a meeting or a long read, run `/cache-keepalive on`. Its line appears under the gauge with the next ping and how long the cache will stay warm; the gauge stays `warm` while you are away, and each ping shows up in the transcript as a one-word turn.
+2. Before a meeting or a long read, run `/cache-keepalive on`. Its line appears under the gauge with the next ping and how long the cache will stay warm; the gauge stays `warm` while you are away. Pings are forks of the conversation, so none of them enters the transcript or the context.
 3. Back at the keyboard, just type: your own message resets the ping budget.
 
 ## Develop
