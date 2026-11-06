@@ -4,7 +4,8 @@ import { ttlMs } from './pricing'
 import type { Ttl } from './pricing'
 
 // hc sets HC_TERMINAL_ID in every terminal it starts: `t1`, or `mac/t7` for a remote machine.
-const TERMINAL_ID = /^([A-Za-z0-9._-]+\/)?t[0-9]+$/
+// Addresses past t19 carry lowercase letters (`t1b`, `t1h`).
+const TERMINAL_ID = /^([A-Za-z0-9._-]+\/)?t[0-9a-z]+$/
 
 /** The file system and environment the reporter touches; the mod builds it from `$`, a test from fakes. */
 export type AppIo = {

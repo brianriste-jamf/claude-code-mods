@@ -74,7 +74,7 @@ const start = async (env: Record<string, string | undefined>, ttl: '5m' | '1h' =
 const ON = { HC_TERMINAL_ID: 't1', HOME }
 
 test('without HC_TERMINAL_ID, or with an invalid one, nothing is written', async () => {
-  for (const id of [undefined, '', '  ', 't1; rm -rf', '../x', 'x', 't', 't1/', '/t1', 'a/b/t1', 'mac/t1x', 't1\n; x']) {
+  for (const id of [undefined, '', '  ', 't1; rm -rf', '../x', 'x', 't', 't1/', '/t1', 'a/b/t1', 'T1', 't1D', 't-1', 't1 x', 't1$(x)', 't1\n; x']) {
     const { app, ops } = await start({ HC_TERMINAL_ID: id, HOME })
     app.report(snap(), 5)
     await app.clear()
@@ -88,7 +88,7 @@ test('without HC_TERMINAL_ID, or with an invalid one, nothing is written', async
 })
 
 test('a valid terminal id switches the reporter on', async () => {
-  for (const id of ['t1', 'mac/t7', 'my-host.lan_2/t12']) {
+  for (const id of ['t1', 'mac/t7', 'my-host.lan_2/t12', 't1b', 't1d', 't1h', 'mac/t1f']) {
     expect((await start({ HC_TERMINAL_ID: id, HOME })).app.isOn).toBe(true)
   }
 })
@@ -129,6 +129,15 @@ test('the file name replaces the slash of a remote terminal, the terminal field 
 
   expect([...files.keys()]).toEqual([`${DIR}/mac_t7.json`])
   expect(JSON.parse(files.get(`${DIR}/mac_t7.json`) ?? '').terminal).toBe('mac/t7')
+})
+
+test('a terminal address with letters gets its own file', async () => {
+  const { app, files } = await start({ HC_TERMINAL_ID: 'mac/t1f', HOME })
+  app.report(snap(), 1)
+  await settle()
+
+  expect([...files.keys()]).toEqual([`${DIR}/mac_t1f.json`])
+  expect(JSON.parse(files.get(`${DIR}/mac_t1f.json`) ?? '').terminal).toBe('mac/t1f')
 })
 
 test('the directory is made once, then the file goes to a temp name and is renamed into place', async () => {
@@ -288,6 +297,7 @@ test('the focus command is empty when the reporter is off or herdr-app has no ab
 test('the focus command is the quoted herdr-app path and terminal id', async () => {
   expect(await focusOf({ HC_TERMINAL_ID: 't7', HOME })).toBe(`'${BIN}' do agent.focus --terminal 't7'`)
   expect(await focusOf({ HC_TERMINAL_ID: 'mac/t7', HOME })).toBe(`'${BIN}' do agent.focus --terminal 'mac/t7'`)
+  expect(await focusOf({ HC_TERMINAL_ID: 't1d', HOME })).toBe(`'${BIN}' do agent.focus --terminal 't1d'`)
 })
 
 test('a path with a space and a single quote stays one quoted word', async () => {

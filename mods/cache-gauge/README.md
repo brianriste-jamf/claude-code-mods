@@ -106,7 +106,7 @@ rows = [
 
 ## Herdr app
 
-In a terminal started by `hc` (`HC_TERMINAL_ID` matches `t1` or `mac/t7`), the gauge also writes `~/.cache/cache-gauge/herdr-app/<id>.json` (`/` becomes `_` in the file name; directory mode 0700). It works alongside the herdr reporter above and does nothing outside `hc`.
+In a terminal started by `hc` (`HC_TERMINAL_ID` matches `t1`, `t1d` or `mac/t7`), the gauge also writes `~/.cache/cache-gauge/herdr-app/<id>.json` (`/` becomes `_` in the file name; directory mode 0700). It works alongside the herdr reporter above and does nothing outside `hc`.
 
 ```json
 {"v":1,"terminal":"mac/t7","session_id":"…","model":"claude-opus-5-5","model_short":"opus 5.5","last_assistant_ms":1730000000000,"ttl_s":300,"updated_ms":1730000001000}
