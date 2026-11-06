@@ -112,7 +112,7 @@ In a terminal started by `hc` (`HC_TERMINAL_ID` matches `t1`, `t1d` or `mac/t7`)
 {"v":1,"terminal":"mac/t7","session_id":"…","model":"claude-opus-5-5","model_short":"opus 5.5","last_assistant_ms":1730000000000,"ttl_s":300,"updated_ms":1730000001000}
 ```
 
-`last_assistant_ms` is `0` before the first reply; `ttl_s` is `300` or `3600`. It is written at start and when the model, a reply or the TTL changes (an unchanged value is not rewritten), through a temp file and a rename, and deleted when the session ends. A crashed session leaves its file: the reader ignores one whose `updated_ms` is over 24 h old. Writing runs `mkdir`, `mv` and `rm` by argv (no shell): the mod API has no rename or delete.
+`last_assistant_ms` is the start of the last request that used the cache: a reply's request, or a keep-alive ping's when that is later. The cache expires `ttl_s` seconds after it. It is `0` before the first reply, and after a compaction or a model switch until the next reply; `ttl_s` is `300` or `3600`. It is written at start and when the model, a reply, a keep-alive ping or the TTL changes (an unchanged value is not rewritten), through a temp file and a rename, and deleted when the session ends. A crashed session leaves its file: the reader ignores one whose `updated_ms` is over 24 h old. Writing runs `mkdir`, `mv` and `rm` by argv (no shell): the mod API has no rename or delete.
 
 ## How the cost is estimated
 

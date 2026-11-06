@@ -1,6 +1,6 @@
 import type { Snapshot } from '../types'
 import { shortModel } from './herdr'
-import { ttlMs } from './pricing'
+import { isCacheInvalidated, lastUsedAt, ttlMs } from './pricing'
 import type { Ttl } from './pricing'
 
 // hc sets HC_TERMINAL_ID in every terminal it starts: `t1`, or `mac/t7` for a remote machine.
@@ -95,8 +95,8 @@ export const createHerdrApp = (getTtl: () => Ttl) => {
       await queue
     },
 
-    /** Writes what changed since the last report; `t` is the clock's now. */
-    report(snap: Snapshot | null, t: number) {
+    /** Writes what changed since the last report; `t` is the clock's now, `pingedAt` the last fork ping (0 for none). */
+    report(snap: Snapshot | null, t: number, pingedAt = 0) {
       if (terminal === '' || io === null || snap === null) {
         return
       }
@@ -108,7 +108,7 @@ export const createHerdrApp = (getTtl: () => Ttl) => {
         session_id: sessionId,
         model,
         model_short: shortModel(model),
-        last_assistant_ms: snap.respondedAt ?? 0,
+        last_assistant_ms: isCacheInvalidated(snap) ? 0 : (lastUsedAt(snap, pingedAt) ?? 0),
         ttl_s: ttlMs(getTtl()) / 1000,
       }
       const key = JSON.stringify(body)

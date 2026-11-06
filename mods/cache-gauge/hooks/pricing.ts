@@ -121,20 +121,30 @@ export const countdown = (ms: number): string => {
 }
 
 /**
+ * When the cache was last read: the start of the reply's last request or of a fork ping, whichever is later. Null before
+ * any reply. `pingedAt` is when a fork ping last read the cache (0 for none).
+ */
+export const lastUsedAt = (snap: Snapshot, pingedAt = 0): number | null =>
+  snap.respondedAt === null ? null : Math.max(snap.respondedAt, pingedAt)
+
+/**
+ * True when the cache no longer serves the next message: a compaction left a new prefix, or `/model` points at another
+ * model than the one that wrote the cache. Shared by the gauge and the Herdr app state file.
+ */
+export const isCacheInvalidated = (snap: Snapshot): boolean =>
+  snap.isCompacted || !isSameModel(snap.currentModel ?? snap.model, snap.model)
+
+/**
  * What the gauge shows at time `t`: the cache's lifetime left, whether it is warm, and the context's fill.
- * `pingedAt` is when a fork ping last read the cache (0 for none); the cache was last used at the later of that and the reply.
+ * The lifetime runs from `lastUsedAt`.
  */
 export const gaugeState = (snap: Snapshot, ttl: Ttl, t: number, pingedAt = 0) => {
   // Fill toward where compaction runs (/autocompact moves it), else the model's window.
   const limit = snap.compactAt ?? snap.window
   const ctx = limit > 0 ? snap.ctxTokens / limit : 0
-  const usedAt = snap.respondedAt === null ? null : Math.max(snap.respondedAt, pingedAt)
+  const usedAt = lastUsedAt(snap, pingedAt)
   const leftMs = usedAt === null ? 0 : usedAt + ttlMs(ttl) - Math.max(t, usedAt)
-  const isWarm =
-    usedAt !== null &&
-    !snap.isCompacted &&
-    isSameModel(snap.currentModel ?? snap.model, snap.model) &&
-    leftMs > 0
+  const isWarm = usedAt !== null && !isCacheInvalidated(snap) && leftMs > 0
 
   return { limit, ctx, leftMs, isWarm }
 }

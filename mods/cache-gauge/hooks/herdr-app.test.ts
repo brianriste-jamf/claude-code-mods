@@ -194,6 +194,51 @@ test('a new reply rewrites the file', async () => {
   expect(JSON.parse(files.get(`${DIR}/t1.json`) ?? '').last_assistant_ms).toBe(7_000_000)
 })
 
+test('a compacted snapshot writes last_assistant_ms 0', async () => {
+  const { app, files } = await start(ON)
+  app.report(snap({ isCompacted: true }), 1)
+  await settle()
+
+  expect(JSON.parse(files.get(`${DIR}/t1.json`) ?? '').last_assistant_ms).toBe(0)
+})
+
+test('a model switch writes last_assistant_ms 0, and switching back restores the reply time', async () => {
+  const { app, files, ops } = await start(ON)
+  app.report(snap(), 1)
+  app.report(snap({ currentModel: 'claude-sonnet-4-6' }), 2)
+  await settle()
+  expect(JSON.parse(files.get(`${DIR}/t1.json`) ?? '').last_assistant_ms).toBe(0)
+
+  app.report(snap(), 3)
+  await settle()
+  expect(JSON.parse(files.get(`${DIR}/t1.json`) ?? '').last_assistant_ms).toBe(1_000_000)
+  expect(ops.filter(op => op.startsWith('rename'))).toHaveLength(3)
+})
+
+test('a fork ping later than the reply moves last_assistant_ms to the ping time', async () => {
+  const { app, files } = await start(ON)
+  app.report(snap(), 2_000_000, 1_500_000)
+  await settle()
+
+  expect(JSON.parse(files.get(`${DIR}/t1.json`) ?? '').last_assistant_ms).toBe(1_500_000)
+})
+
+test('a fork ping earlier than the reply leaves last_assistant_ms at the reply time', async () => {
+  const { app, files } = await start(ON)
+  app.report(snap(), 2_000_000, 500_000)
+  await settle()
+
+  expect(JSON.parse(files.get(`${DIR}/t1.json`) ?? '').last_assistant_ms).toBe(1_000_000)
+})
+
+test('with no fork ping last_assistant_ms is the reply time', async () => {
+  const { app, files } = await start(ON)
+  app.report(snap(), 2_000_000)
+  await settle()
+
+  expect(JSON.parse(files.get(`${DIR}/t1.json`) ?? '').last_assistant_ms).toBe(1_000_000)
+})
+
 test('an unchanged value is not written again, whatever the clock says', async () => {
   const { app, ops } = await start(ON)
   app.report(snap(), 1)
@@ -372,6 +417,35 @@ test('in an hc terminal the mod writes the state file after a reply and removes 
 
   await $.session.end({ reason: 'other', sessionId: 's1', resume: { id: 's1' } })
   expect(commands.at(-1)).toEqual(['rm', '-f', file])
+})
+
+test('a fork ping stored by cache-keepalive reaches the state file', async ($, on) => {
+  const { clock, writes } = wire(on, { HC_TERMINAL_ID: 't1', HOME })
+  // cache-keepalive is not loaded: answer its atom ourselves, and leave every other atom to the mod.
+  let pingedAt = 0
+  on('state.get' as never, (async (
+    _$: unknown,
+    e: { plugin: string; key: string },
+    next: (e: unknown) => Promise<{ value: object }>,
+  ) => {
+    const got = await next(e)
+
+    return e.plugin === 'cache-keepalive' && e.key === 'lastPingAt'
+      ? { value: { ...got.value, value: pingedAt } }
+      : got
+  }) as never)
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await clock.advance(5000)
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  await settle()
+  expect(JSON.parse(writes.at(-1)?.text ?? '').last_assistant_ms).toBe(5000)
+
+  // A ping at 200 s is a cache read later than the reply: the next tick rewrites the file with its time.
+  pingedAt = 200_000
+  await clock.advance(1000)
+  await settle()
+  expect(JSON.parse(writes.at(-1)?.text ?? '').last_assistant_ms).toBe(200_000)
 })
 
 test('outside an hc terminal the mod touches neither the file system nor mv and rm', async ($, on) => {

@@ -86,8 +86,9 @@ async function sync($: EngineInterface, { herdr, app }: Reporters, t?: number) {
   if (herdr.isOn || app.isOn) {
     const snap = await read($, snapshot)
     const at = t ?? (await $.clock.now())
-    herdr.report(snap, at, await read($, pingedAt))
-    app.report(snap, at)
+    const ping = await read($, pingedAt)
+    herdr.report(snap, at, ping)
+    app.report(snap, at, ping)
   }
 }
 

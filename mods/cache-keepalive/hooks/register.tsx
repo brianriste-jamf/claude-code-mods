@@ -10,7 +10,7 @@ const NAME = 'cache-keepalive'
 const TICK_MS = 1000
 const view = atom({ plugin: 'cache-keepalive', key: 'view' } as const, { kind: 'off' } as KeepaliveView)
 // Survives a reload, which starts the module over: idle time counts from the cache's last use
-// (a reply or a ping), not the reload.
+// (the start of a reply's last request, or of a ping), not the reload.
 const lastReply = atom({ plugin: 'cache-keepalive', key: 'lastReply' } as const, 0)
 // When the last successful ping's request started (0 for none); cache-gauge reads it.
 const lastPingAt = atom({ plugin: 'cache-keepalive', key: 'lastPingAt' } as const, 0)
@@ -31,8 +31,10 @@ type Keepalive = {
   model: string | undefined
   ttl: Ttl
   ttlSource: string
-  /** When the cache was last used: the main thread's last reply or the last ping that read it. */
+  /** When the cache was last used: the start of the main thread's last request or of the last ping that read it. */
   lastActivity: number
+  /** Start of the main thread's latest request in the current turn. */
+  lastRequestAt: number | undefined
   /** No ping before this, after an API error. */
   retryAt: number
   /** Counts idle periods, so a ping that returns after a message of your own is dropped. */
@@ -121,7 +123,7 @@ async function ping($: EngineInterface, k: Keepalive) {
       // wait for the next reply instead of paying for the prefix again.
       k.hasLapsed = true
     } else {
-      k.lastActivity = await $.clock.now()
+      k.lastActivity = startedAt
       await update($, lastReply, () => k.lastActivity)
       await update($, lastPingAt, () => startedAt)
       await settlePing($, k)
@@ -219,6 +221,7 @@ export const register: Register = (on, options) => {
     ttl: '5m',
     ttlSource: 'default (assumed)',
     lastActivity: 0,
+    lastRequestAt: undefined,
     retryAt: 0,
     period: 0,
     pings: 0,
@@ -254,12 +257,22 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // The API measures the cache's lifetime from the start of the request, so a long response counts against it.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId === undefined) {
+      k.lastRequestAt = await $.clock.now()
+    }
+
+    return yield* next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     // A subagent's turn says nothing about the main conversation's cache.
     if (e.agentId === undefined) {
       k.isBusy = false
       k.hasLapsed = false
-      k.lastActivity = await $.clock.now()
+      k.lastActivity = k.lastRequestAt ?? (await $.clock.now())
+      k.lastRequestAt = undefined
       await update($, lastReply, () => k.lastActivity)
       k.model = e.usage?.model ?? k.model
     }
