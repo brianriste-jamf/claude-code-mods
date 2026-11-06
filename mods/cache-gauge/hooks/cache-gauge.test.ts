@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { alarmMode, alarmPhase, coldText, endingText } from './alarm'
-import { shortModel } from './herdr'
+import { createHerdr, shortModel } from './herdr'
 import { bar, calibrate, gaugeState, level, nextCost, ratesFor, usd, weightedUnits } from './pricing'
 
 const OPUS = 'claude-opus-5-5'
@@ -1643,4 +1643,84 @@ test('a ping does not warm a compacted cache', () => {
   const t = 10 * MIN
   const s = gaugeState({ ...baseSnap, respondedAt: t - 6 * MIN, isCompacted: true }, '5m', t, t - 1 * MIN)
   expect(s.isWarm).toBe(false)
+})
+
+// herdr.report on its own: a recording runner stands in for the herdr CLI.
+const reportingHerdr = async () => {
+  const sent: string[][] = []
+  const herdr = createHerdr(() => '5m')
+  await herdr.detect(async argv => {
+    if (argv[0] === 'sh') {
+      return { stdout: argv[2]?.includes('HERDR_PANE_ID') ? PANE : '' }
+    }
+    sent.push(argv.slice(SRC.length))
+
+    return { stdout: '' }
+  })
+
+  return { herdr, caches: () => sent.filter(a => a[1]?.startsWith('cache=')).map(a => a.slice(1)) }
+}
+
+test('herdr.report counts a recent fork ping as the cache use: warm with the later expiry', async () => {
+  const t = 10 * MIN
+  const snap = { ...baseSnap, respondedAt: t - 6 * MIN }
+
+  const plain = await reportingHerdr()
+  plain.herdr.report(snap, t)
+  await flush()
+  expect(plain.caches()).toEqual([['cache=cold']])
+
+  const pinged = await reportingHerdr()
+  pinged.herdr.report(snap, t, t - 1 * MIN)
+  await flush()
+  expect(pinged.caches()).toEqual([['cache=warm 4m', '--ttl-ms', String(4 * MIN)]])
+})
+
+test('herdr.report sends again when only the ping time changed', async () => {
+  const t = 10 * MIN
+  const snap = { ...baseSnap, respondedAt: t - 6 * MIN }
+  const { herdr, caches } = await reportingHerdr()
+
+  herdr.report(snap, t, t - 1000)
+  herdr.report(snap, t, t - 1000)
+  await flush()
+  expect(caches()).toEqual([['cache=warm 5m', '--ttl-ms', '299000']])
+
+  // Same `warm 5m` text, later lifetime: only the ping time differs.
+  herdr.report(snap, t, t - 500)
+  await flush()
+  expect(caches()).toEqual([
+    ['cache=warm 5m', '--ttl-ms', '299000'],
+    ['cache=warm 5m', '--ttl-ms', '299500'],
+  ])
+})
+
+test('a ping stored by cache-keepalive reaches the herdr report', async ($, on) => {
+  const calls = herdrCalls(on, PANE)
+  const clock = bandUsage(on, { usd: 0.099 })
+  on('turn.complete', () => ({ text: '' }))
+  // cache-keepalive is not loaded: answer its atom ourselves, and leave every other atom to the mod.
+  let pingedAt = 0
+  on('state.get' as never, (async (
+    _$: unknown,
+    e: { plugin: string; key: string },
+    next: (e: unknown) => Promise<{ value: object }>,
+  ) => {
+    const got = await next(e)
+
+    return e.plugin === 'cache-keepalive' && e.key === 'lastPingAt'
+      ? { value: { ...got.value, value: pingedAt } }
+      : got
+  }) as never)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await answerTurn($)
+  await clock.advance(200_000)
+  await flush()
+  expect(calls.at(-1)).toEqual([...REPORT, 'cache=warm 2m', '--ttl-ms', '120000'])
+
+  // A ping at 200 s restarts the lifetime: the next tick reports a full 5m, though no reply came.
+  pingedAt = 200_000
+  await clock.advance(1000)
+  await flush()
+  expect(calls.at(-1)).toEqual([...REPORT, 'cache=warm 5m', '--ttl-ms', '299000'])
 })
