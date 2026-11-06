@@ -51,7 +51,8 @@ test('the band line appears when armed, keeps the line beneath it, and goes when
 })
 
 // A session whose fork is answered over a 200k-token prefix the cache serves (`hit`) or does not.
-function idleSession(on: Parameters<TestBody>[1], fork: { hit: boolean }) {
+// `takesMs` is how long the fork takes to answer, on `clock`.
+function idleSession(on: Parameters<TestBody>[1], fork: { hit: boolean; takesMs?: number; clock?: { advance(ms: number): Promise<unknown> } }) {
   const cost = { usd: 1 }
   const notes: string[] = []
   const submitted: string[] = []
@@ -72,8 +73,11 @@ function idleSession(on: Parameters<TestBody>[1], fork: { hit: boolean }) {
     submitted.push(e.text)
     return { text: e.text }
   })
-  on('model.fork', ($, e) => {
+  on('model.fork', async ($, e) => {
     forks.push(e.prompt)
+    if (fork.takesMs) {
+      await fork.clock?.advance(fork.takesMs)
+    }
     cost.usd += fork.hit ? 0.03 : 1.25
     const usage = fork.hit
       ? { input_tokens: 20, output_tokens: 1, cache_read_input_tokens: 200_000, cache_creation_input_tokens: 0 }
@@ -132,4 +136,52 @@ test('a ping that finds the cache gone stops pinging until the next reply', asyn
   expect(s.notes).toEqual([])
   const band = await $.ui.mount(BAND)
   expect(await band.find({ type: 'Text', text: /cache already cold, nothing to keep warm$/ })).toBeDefined()
+})
+
+const OPUS = 'us.anthropic.claude-opus-5-5'
+const COMPLETE = {
+  answer: '',
+  durationMs: 1,
+  isAborted: false,
+  turnId: 't1',
+  reason: 'answer',
+  usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: OPUS },
+} as const
+
+test('the idle timer counts from the start of the last request, not the end of the reply', async ($, on) => {
+  const clock = mock.clock(on)
+  const s = idleSession(on, { hit: true })
+  on('turn.complete', () => ({ text: '' }))
+  on('turn.step', async function* () {
+    return { turnId: 't1', index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: COMPLETE.usage } as const
+  })
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run(run('on'))
+  await clock.advance(10_000)
+  // The final request starts here, then streams for a minute.
+  for await (const chunk of $.turn.step({ turnId: 't1', index: 0, model: OPUS, messageCount: 3 })) {
+    void chunk
+  }
+  await clock.advance(60_000)
+  await $.turn.complete(COMPLETE)
+
+  // 90% of the 5m lifetime after the request started is 270s: 210s after the reply ended.
+  await clock.advance(200_000)
+  expect(s.forks.length).toBe(0)
+  await clock.advance(11_000)
+  expect(s.forks.length).toBe(1)
+})
+
+test('the next ping is timed from the previous ping\'s start, not its end', async ($, on) => {
+  const clock = mock.clock(on)
+  const s = idleSession(on, { hit: true, takesMs: 30_000, clock })
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run(run('on'))
+  // The first ping starts at 270s and ends at 300s; the second is due 270s after the first started.
+  await clock.advance(270_000 + 270_000 - 5_000)
+  expect(s.forks.length).toBe(1)
+  await clock.advance(10_000)
+  expect(s.forks.length).toBe(2)
 })
