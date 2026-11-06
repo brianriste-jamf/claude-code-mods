@@ -24,6 +24,7 @@ While armed, it draws a line above the prompt, under `cache-gauge`'s when that m
 ↻ keepalive 3/24 · $0.09 spent · next ping 2:10 · keeps warm ~1h34m
 ↻ keepalive 24/24 · $0.72 spent · budget used, cache lapses in 4:12
 ↻ keepalive 3/24 · waits for the turn to end
+↻ keepalive 3/24 · $0.09 spent · pinging…
 ↻ keepalive 0/24 · cache already cold, nothing to keep warm
 ```
 

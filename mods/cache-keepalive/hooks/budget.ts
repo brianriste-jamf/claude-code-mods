@@ -81,6 +81,8 @@ export function describe(v: Exclude<KeepaliveView, { kind: 'off' }>): { color: '
   switch (v.kind) {
     case 'waiting':
       return { color: 'success', text: `${head} · next ping ${clock(v.nextPingMs)} · keeps warm ~${clock(v.warmForMs)}` }
+    case 'pinging':
+      return { color: 'success', text: `${head} · pinging…` }
     case 'spent':
       return { color: 'warning', text: `${head} · budget used, cache lapses in ${clock(v.lapsesInMs)}` }
     case 'busy':
