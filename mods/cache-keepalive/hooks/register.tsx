@@ -17,14 +17,27 @@ const lastPingAt = atom({ plugin: 'cache-keepalive', key: 'lastPingAt' } as cons
 const PING = 'Cache keep-alive ping. Reply with the single word "ok" and use no tools.'
 // How long to wait before trying again after an API error (429, 529, a dropped connection).
 const RETRY_MS = 30_000
+// A main turn silent this long is treated as dead (an error or a reload mid-turn never sent `turn.complete`).
+// Mirrors AGENT_STALE_MS in cache-gauge.
+const BUSY_STALE_MS = 600_000
 
 type Keepalive = {
   options: PlanOptions
   override: unknown
   isEnabled: boolean
-  isBusy: boolean
+  /** When the main loop last started a turn or a request (0 for idle); a turn that never completes goes stale. */
+  busySeenAt: number
+  /** The clock at the latest tick: `turn.start` has no clock access of its own. */
+  tickAt: number
+  /** Main-loop tool calls in flight. */
+  toolsRunning: number
+  /** Orders the steps that draw the band: the ticket of the latest step and of the latest to draw. */
+  ticket: number
+  drawn: number
   /** A fork is in flight; the tick must not send a second one. */
   isPinging: boolean
+  /** The idle period the in-flight fork belongs to. */
+  pingPeriod: number
   /** A ping found the cache already gone, or there was no conversation to fork yet. */
   hasLapsed: boolean
   hasWarned: boolean
@@ -102,6 +115,7 @@ async function ping($: EngineInterface, k: Keepalive) {
   k.isPinging = true
   k.pings += 1
   const period = k.period
+  k.pingPeriod = period
 
   try {
     const fromUsd = await sessionUsd($)
@@ -156,33 +170,53 @@ async function settlePing($: EngineInterface, k: Keepalive) {
 }
 
 async function step($: EngineInterface, k: Keepalive) {
+  // Ticks overlap while a ping is out; a step that began earlier must not redraw over a later one.
+  const ticket = ++k.ticket
+  const draw = (next: KeepaliveView) => {
+    if (ticket < k.drawn) {
+      return Promise.resolve()
+    }
+    k.drawn = ticket
+
+    return show($, next)
+  }
+  const now = await $.clock.now()
+  k.tickAt = now
+
   if (!k.isEnabled) {
-    await show($, { kind: 'off' })
+    await draw({ kind: 'off' })
     return
   }
 
   const p = plan(k.model, k.ttl, k.options)
   const counts = { pings: k.pings, limit: p.limit, spentUsd: k.spentUsd }
-  const now = await $.clock.now()
   const idle = now - k.lastActivity
 
-  if (k.isBusy) {
-    await show($, { kind: 'busy', ...counts })
-    return
+  // A main-loop tool call can run past the stale limit and is no sign of a dead turn.
+  if (k.toolsRunning > 0) {
+    k.busySeenAt = now
   }
 
-  if (k.isPinging) {
-    await show($, { kind: 'pinging', ...counts })
+  if (k.busySeenAt > 0 && now - k.busySeenAt < BUSY_STALE_MS) {
+    await draw({ kind: 'busy', ...counts })
     return
   }
+  k.busySeenAt = 0
 
   if (k.hasLapsed || idle >= p.ttlMs) {
-    await show($, { kind: 'cold', ...counts })
+    await draw({ kind: 'cold', ...counts })
+    return
+  }
+
+  // Only the fork of this idle period shows; one from an earlier period is dropped when it returns.
+  // `ping()` counts a ping before it finishes, so the view shows the completed ones.
+  if (k.isPinging && k.pingPeriod === k.period) {
+    await draw({ kind: 'pinging', ...counts, pings: k.pings - 1 })
     return
   }
 
   if (k.pings >= p.limit) {
-    await show($, { kind: 'spent', ...counts, lapsesInMs: p.ttlMs - idle })
+    await draw({ kind: 'spent', ...counts, lapsesInMs: p.ttlMs - idle })
 
     if (!k.hasWarned) {
       k.hasWarned = true
@@ -192,7 +226,7 @@ async function step($: EngineInterface, k: Keepalive) {
     return
   }
 
-  if (idle >= p.intervalMs && now >= k.retryAt) {
+  if (idle >= p.intervalMs && now >= k.retryAt && !k.isPinging) {
     await ping($, k)
     return
   }
@@ -201,7 +235,7 @@ async function step($: EngineInterface, k: Keepalive) {
   // The last ping still leaves the cache warm for a full lifetime after it.
   const warmForMs = nextPingMs + (p.limit - k.pings - 1) * p.intervalMs + p.ttlMs
 
-  await show($, { kind: 'waiting', ...counts, nextPingMs, warmForMs })
+  await draw({ kind: 'waiting', ...counts, nextPingMs, warmForMs })
 }
 
 export const register: Register = (on, options) => {
@@ -214,8 +248,13 @@ export const register: Register = (on, options) => {
     },
     override: options.ttl,
     isEnabled: options.autoStart === true,
-    isBusy: false,
+    busySeenAt: 0,
+    tickAt: 0,
+    toolsRunning: 0,
+    ticket: 0,
+    drawn: 0,
     isPinging: false,
+    pingPeriod: 0,
     hasLapsed: false,
     hasWarned: false,
     model: undefined,
@@ -232,7 +271,8 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const held = await read($, lastReply)
-    k.lastActivity = held > 0 ? held : await $.clock.now()
+    k.tickAt = await $.clock.now()
+    k.lastActivity = held > 0 ? held : k.tickAt
     await refreshTtl($, k)
     // Priced from the start: an unknown model falls back to the 0.1x read price,
     // which shrinks Opus 5.5's break-even budget from 24 pings to 11.
@@ -247,25 +287,50 @@ export const register: Register = (on, options) => {
       description: 'Keep the prompt cache warm while idle: /cache-keepalive on | off | status',
     })
 
-    $.clock.every(TICK_MS, () => void step($, k))
+    // A tick that fails (the session is going away) is retried by the next one.
+    $.clock.every(TICK_MS, () => void step($, k).catch(() => undefined))
 
     return next(e)
   })
 
-  on('turn.start', ($, e, next) => {
+  on('turn.start', async ($, e, next) => {
     // Only the main loop's turn ends with a `turn.complete` that clears this; a subagent starting
     // after the main turn ended would otherwise leave the keep-alive waiting for a turn that never ends.
     if (e.agentId === undefined) {
-      k.isBusy = true
+      k.busySeenAt = k.tickAt
     }
 
-    return next(e)
+    try {
+      return await next(e)
+    } catch (error) {
+      // A turn that was refused never completes.
+      if (e.agentId === undefined) {
+        k.busySeenAt = 0
+      }
+      throw error
+    }
+  })
+
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId !== undefined) {
+      return next(e)
+    }
+
+    k.toolsRunning += 1
+    k.busySeenAt = k.tickAt
+    try {
+      return await next(e)
+    } finally {
+      k.toolsRunning -= 1
+      k.busySeenAt = k.tickAt
+    }
   })
 
   // The API measures the cache's lifetime from the start of the request, so a long response counts against it.
   on('turn.step', async function* ($, e, next) {
     if (e.agentId === undefined) {
       k.lastRequestAt = await $.clock.now()
+      k.busySeenAt = k.lastRequestAt
     }
 
     return yield* next(e)
@@ -274,7 +339,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     // A subagent's turn says nothing about the main conversation's cache.
     if (e.agentId === undefined) {
-      k.isBusy = false
+      k.busySeenAt = 0
       k.hasLapsed = false
       k.lastActivity = k.lastRequestAt ?? (await $.clock.now())
       k.lastRequestAt = undefined
@@ -319,6 +384,7 @@ export const register: Register = (on, options) => {
 
     if (arg === 'off') {
       k.isEnabled = false
+      k.drawn = ++k.ticket
       await show($, { kind: 'off' })
 
       return { text: 'Cache keep-alive off.' }

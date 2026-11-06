@@ -200,7 +200,7 @@ test('while the fork is pending the band shows that it is pinging', async ($, on
     clock,
     during: async () => {
       const band = await $.ui.mount(BAND)
-      during = await band.find({ type: 'Text', text: /^keepalive 1\/24 · pinging…$/ })
+      during = await band.find({ type: 'Text', text: /^keepalive 0\/24 · pinging…$/ })
     },
   })
 
@@ -227,4 +227,120 @@ test('a subagent starting a turn after the main turn ended does not stop the nex
 
   await clock.advance(271_000)
   expect(s.forks.length).toBe(1)
+})
+
+// The tick that draws the band runs on its own; wait for a line to appear rather than read the band once.
+async function findLine($: Parameters<TestBody>[0], text: RegExp) {
+  for (let i = 0; i < 100; i++) {
+    const found = await (await $.ui.mount(BAND)).find({ type: 'Text', text })
+    if (found) {
+      return found
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  return undefined
+}
+
+test('a main turn that never completes stops counting as busy after ten minutes', async ($, on) => {
+  const clock = mock.clock(on)
+  idleSession(on, { hit: true })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run(run('on'))
+  await clock.advance(1_000)
+  await $.turn.start({ turnId: 't1' } as never)
+
+  await clock.advance(300_000)
+  expect(await (await $.ui.mount(BAND)).find({ type: 'Text', text: /waits for the turn to end$/ })).toBeDefined()
+
+  await clock.advance(310_000)
+  const band = await $.ui.mount(BAND)
+  expect(await band.find({ type: 'Text', text: /waits for the turn to end$/ })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: /cache already cold/ })).toBeDefined()
+})
+
+test('a turn.start that is rejected does not leave the session busy', async ($, on) => {
+  const clock = mock.clock(on)
+  const s = idleSession(on, { hit: true })
+  on('turn.start', () => {
+    throw new Error('refused')
+  })
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run(run('on'))
+  await clock.advance(1_000)
+  await $.turn.start({ turnId: 't1' } as never).catch(() => undefined)
+
+  await clock.advance(271_000)
+  expect(s.forks.length).toBe(1)
+})
+
+test('a fork from an earlier idle period does not show pinging for the new one', async ($, on) => {
+  const clock = mock.clock(on)
+  let during: { pinging: unknown; waiting: unknown } | undefined
+  idleSession(on, {
+    hit: true,
+    clock,
+    during: async () => {
+      // Your own message starts a new idle period while the old period's fork is still out.
+      // Re-arming runs a step to completion here, so no tick has to win a race to redraw the band.
+      await $.prompt.submit({ text: 'hello' } as never)
+      await $.command.run(run('on'))
+      const band = await $.ui.mount(BAND)
+      during = {
+        pinging: await band.find({ type: 'Text', text: /pinging…$/ }),
+        waiting: await band.find({ type: 'Text', text: /^keepalive 0\/24 · next ping/ }),
+      }
+    },
+  })
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run(run('on'))
+  await clock.advance(270_000 + 5_000)
+
+  expect(during?.pinging).toBeUndefined()
+  expect(during?.waiting).toBeDefined()
+})
+
+test('a fork still pending past the cache lifetime shows the cache as cold', async ($, on) => {
+  const clock = mock.clock(on)
+  let during: unknown
+  idleSession(on, {
+    hit: true,
+    takesMs: 40_000,
+    clock,
+    during: async () => {
+      during = await findLine($, /cache already cold/)
+    },
+  })
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run(run('on'))
+  await clock.advance(270_000 + 41_000)
+
+  expect(during).toBeDefined()
+})
+
+test('a main tool call that runs past ten minutes keeps the band on busy', async ($, on) => {
+  const clock = mock.clock(on)
+  const s = idleSession(on, { hit: true })
+  let finish: () => void = () => undefined
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  on('tool.call', () => new Promise((resolve) => {
+    finish = () => resolve({ result: 'done' } as never)
+  }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run(run('on'))
+  await clock.advance(1_000)
+  await $.turn.start({ turnId: 't1' } as never)
+  const call = $.tool.call({ tool: 'Bash', command: 'sleep 700' } as never)
+
+  await clock.advance(660_000)
+  expect(await findLine($, /waits for the turn to end$/)).toBeDefined()
+  expect(s.forks.length).toBe(0)
+
+  finish()
+  await call
 })
