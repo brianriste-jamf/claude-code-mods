@@ -172,6 +172,7 @@ async function step($: EngineInterface, k: Keepalive) {
   }
 
   if (k.isPinging) {
+    await show($, { kind: 'pinging', ...counts })
     return
   }
 
@@ -252,7 +253,11 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.start', ($, e, next) => {
-    k.isBusy = true
+    // Only the main loop's turn ends with a `turn.complete` that clears this; a subagent starting
+    // after the main turn ended would otherwise leave the keep-alive waiting for a turn that never ends.
+    if (e.agentId === undefined) {
+      k.isBusy = true
+    }
 
     return next(e)
   })

@@ -52,7 +52,11 @@ test('the band line appears when armed, keeps the line beneath it, and goes when
 
 // A session whose fork is answered over a 200k-token prefix the cache serves (`hit`) or does not.
 // `takesMs` is how long the fork takes to answer, on `clock`.
-function idleSession(on: Parameters<TestBody>[1], fork: { hit: boolean; takesMs?: number; clock?: { advance(ms: number): Promise<unknown> } }) {
+// `during` runs while the fork is pending.
+function idleSession(
+  on: Parameters<TestBody>[1],
+  fork: { hit: boolean; takesMs?: number; clock?: { advance(ms: number): Promise<unknown> }; during?: () => Promise<void> },
+) {
   const cost = { usd: 1 }
   const notes: string[] = []
   const submitted: string[] = []
@@ -78,6 +82,7 @@ function idleSession(on: Parameters<TestBody>[1], fork: { hit: boolean; takesMs?
     if (fork.takesMs) {
       await fork.clock?.advance(fork.takesMs)
     }
+    await fork.during?.()
     cost.usd += fork.hit ? 0.03 : 1.25
     const usage = fork.hit
       ? { input_tokens: 20, output_tokens: 1, cache_read_input_tokens: 200_000, cache_creation_input_tokens: 0 }
@@ -184,4 +189,42 @@ test('the next ping is timed from the previous ping\'s start, not its end', asyn
   expect(s.forks.length).toBe(1)
   await clock.advance(10_000)
   expect(s.forks.length).toBe(2)
+})
+
+test('while the fork is pending the band shows that it is pinging', async ($, on) => {
+  const clock = mock.clock(on)
+  let during: unknown
+  const s = idleSession(on, {
+    hit: true,
+    takesMs: 3_000,
+    clock,
+    during: async () => {
+      const band = await $.ui.mount(BAND)
+      during = await band.find({ type: 'Text', text: /^keepalive 1\/24 · pinging…$/ })
+    },
+  })
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run(run('on'))
+  await clock.advance(270_000 + 5_000)
+
+  expect(s.forks.length).toBe(1)
+  expect(during).toBeDefined()
+})
+
+test('a subagent starting a turn after the main turn ended does not stop the next ping', async ($, on) => {
+  const clock = mock.clock(on)
+  const s = idleSession(on, { hit: true })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.command.run(run('on'))
+  await $.turn.start({ turnId: 't1' } as never)
+  await $.turn.complete(COMPLETE)
+  // A background subagent starts its turn while the main thread is idle, and never completes one here.
+  await $.turn.start({ turnId: 's1', agentId: 'sub' } as never)
+
+  await clock.advance(271_000)
+  expect(s.forks.length).toBe(1)
 })
