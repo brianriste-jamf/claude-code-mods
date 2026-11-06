@@ -135,14 +135,20 @@ async function ping($: EngineInterface, k: Keepalive) {
     } else if (!('usage' in r) || !isCacheHit(r.usage)) {
       // Nothing cached to keep warm (nothing to fork yet, or the entry had lapsed):
       // wait for the next reply instead of paying for the prefix again.
-      k.hasLapsed = true
+      // A main turn that used the cache during the fork has refreshed it, so it is not gone.
+      if (k.lastActivity <= startedAt) {
+        k.hasLapsed = true
+      }
     } else {
-      k.lastActivity = startedAt
+      k.lastActivity = Math.max(k.lastActivity, startedAt)
       await update($, lastReply, () => k.lastActivity)
       await update($, lastPingAt, () => startedAt)
       await settlePing($, k)
     }
   } catch {
+    if (k.period !== period) {
+      return
+    }
     // The engine refused to send it: try again later rather than on every tick.
     k.pings -= 1
     k.retryAt = (await $.clock.now()) + RETRY_MS
@@ -193,7 +199,8 @@ async function step($: EngineInterface, k: Keepalive) {
   const idle = now - k.lastActivity
 
   // A main-loop tool call can run past the stale limit and is no sign of a dead turn.
-  if (k.toolsRunning > 0) {
+  // Only while the turn is still marked busy: a tool that outlives `turn.complete` must not re-mark it.
+  if (k.toolsRunning > 0 && k.busySeenAt > 0) {
     k.busySeenAt = now
   }
 
@@ -321,8 +328,10 @@ export const register: Register = (on, options) => {
     try {
       return await next(e)
     } finally {
-      k.toolsRunning -= 1
-      k.busySeenAt = k.tickAt
+      k.toolsRunning = Math.max(0, k.toolsRunning - 1)
+      if (k.busySeenAt > 0) {
+        k.busySeenAt = k.tickAt
+      }
     }
   })
 
@@ -340,6 +349,9 @@ export const register: Register = (on, options) => {
     // A subagent's turn says nothing about the main conversation's cache.
     if (e.agentId === undefined) {
       k.busySeenAt = 0
+      // A tool still counted here belongs to a turn that is over.
+      // A tool still counted here belongs to a turn that is over.
+      k.toolsRunning = 0
       k.hasLapsed = false
       k.lastActivity = k.lastRequestAt ?? (await $.clock.now())
       k.lastRequestAt = undefined
