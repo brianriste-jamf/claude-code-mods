@@ -92,6 +92,13 @@ async function sync($: EngineInterface, { herdr, app }: Reporters, t?: number) {
   }
 }
 
+// The session id can change under a running module (`/clear`, `/resume`); the state file must carry the current one.
+async function refreshSession($: EngineInterface, { app }: Reporters) {
+  if (app.isOn) {
+    app.setSession(await $.session.id().catch(() => ''))
+  }
+}
+
 const onAbovePrompt = (on: On, getTtl: () => Ttl) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const snap = await read($, snapshot)
@@ -309,6 +316,7 @@ export const register: Register = (on, options) => {
           await update($, isAgentsBusy, () => isAgentsNow)
         }
         await update($, now, () => t)
+        await refreshSession($, reporters)
         await sync($, reporters, t)
         const snap = await read($, snapshot)
         const cost = snap === null ? null : nextCost(snap.ctxTokens, snap.baseUsd, snap.currentModel ?? snap.model, ttl)
@@ -445,6 +453,7 @@ export const register: Register = (on, options) => {
     await update($, snapshot, () => fresh)
     drawnAt = completedAt
     await update($, now, () => completedAt)
+    await refreshSession($, reporters)
     await sync($, reporters, completedAt)
 
     return result
@@ -537,8 +546,15 @@ export const register: Register = (on, options) => {
     alarm.reset()
     await herdr.clear()
     await app.clear()
+    const result = await next(e)
+    // `/clear` and `/resume` end the session but the process goes on under a new id, with no session.start:
+    // report again so the pane and the state file are not left blank or on the old id.
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      await refreshSession($, reporters)
+      await sync($, reporters)
+    }
 
-    return next(e)
+    return result
   })
 
   on('session.compact', async ($, e, next) => {
