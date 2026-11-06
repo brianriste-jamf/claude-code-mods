@@ -84,6 +84,15 @@ export const createHerdrApp = (getTtl: () => Ttl) => {
       }
     },
 
+    /** The session id changed in place (`/clear`, `/resume`): the next report writes the new one. Empty or unchanged ids are ignored. */
+    setSession(id: string) {
+      if (id === '' || id === sessionId) {
+        return
+      }
+      sessionId = id
+      sent = null
+    },
+
     /** Removes the file, for a session that ends; resolves once the removal has run. */
     async clear() {
       if (terminal === '' || io === null) {

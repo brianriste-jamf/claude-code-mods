@@ -279,6 +279,25 @@ test('the end of the session waits for a write still in flight, so the delete co
   expect(files.size).toBe(0)
 })
 
+test('a session id that changes in place is written by the next report; empty and unchanged ids are ignored', async () => {
+  const { app, files } = await start(ON)
+  const read = () => JSON.parse(files.get(`${DIR}/t1.json`) ?? '{}').session_id
+  app.report(snap(), 1)
+  await settle()
+  expect(read()).toBe('s1')
+
+  app.setSession('')
+  app.setSession('s1')
+  app.report(snap(), 2)
+  await settle()
+  expect(JSON.parse(files.get(`${DIR}/t1.json`) ?? '{}').updated_ms).toBe(1)
+
+  app.setSession('s2')
+  app.report(snap(), 3)
+  await settle()
+  expect(read()).toBe('s2')
+})
+
 test('a file system that throws never throws out of the reporter, and the next report retries', async () => {
   for (const op of ['mkdir', 'write', 'rename', 'remove'] as const) {
     const f = fake(ON, { [op]: true })
@@ -379,7 +398,8 @@ const wire = (on: On, env: Record<string, string>, answer: (argv: string[]) => s
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('settings.read', () => ({ value: {} }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
-  on('session.id', () => ({ value: 'sess-1' }))
+  const session = { id: 'sess-1' }
+  on('session.id', () => ({ value: session.id }))
   on('ui.render', () => ({ type: 'Box', children: [] }))
   on('turn.complete', () => ({ text: '' }))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
@@ -394,7 +414,7 @@ const wire = (on: On, env: Record<string, string>, answer: (argv: string[]) => s
     return { value: { exitCode: 0, stdout: answer([...e.argv]), stderr: '' } } as never
   })
 
-  return { clock, writes, commands }
+  return { clock, writes, commands, session }
 }
 
 test('in an hc terminal the mod writes the state file after a reply and removes it at the end', async ($, on) => {
@@ -417,6 +437,39 @@ test('in an hc terminal the mod writes the state file after a reply and removes 
 
   await $.session.end({ reason: 'other', sessionId: 's1', resume: { id: 's1' } })
   expect(commands.at(-1)).toEqual(['rm', '-f', file])
+})
+
+test('after /clear the state file is rewritten under the new session id', async ($, on) => {
+  const { clock, writes, commands, session } = wire(on, { HC_TERMINAL_ID: 't1', HOME })
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await clock.advance(5000)
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  await settle()
+  expect(JSON.parse(writes.at(-1)?.text ?? '').session_id).toBe('sess-1')
+
+  session.id = 'sess-2'
+  await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: { id: 'sess-1' } })
+  await settle()
+
+  const file = `${DIR}/t1.json`
+  expect(commands).toContainEqual(['rm', '-f', file])
+  expect(JSON.parse(writes.at(-1)?.text ?? '').session_id).toBe('sess-2')
+  expect(commands.at(-1)).toEqual(['mv', '-f', `${file}.tmp`, file])
+})
+
+test('a session id that changes without a session.end reaches the file on the next tick', async ($, on) => {
+  const { clock, writes, session } = wire(on, { HC_TERMINAL_ID: 't1', HOME })
+
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await clock.advance(5000)
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: TURN_USAGE })
+  await settle()
+
+  session.id = 'sess-3'
+  await clock.advance(1000)
+  await settle()
+  expect(JSON.parse(writes.at(-1)?.text ?? '').session_id).toBe('sess-3')
 })
 
 test('a fork ping stored by cache-keepalive reaches the state file', async ($, on) => {
